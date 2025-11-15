@@ -1,25 +1,48 @@
+import dotenv from 'dotenv';
+
+dotenv.config();
+
 export const config = {
-  env: process.env.NODE_ENV ?? 'development',
-  port: Number(process.env.PORT ?? 3001),
-  databaseUrl: process.env.DATABASE_URL ?? '',
-  redisUrl: process.env.UPSTASH_REDIS_URL ?? '',
-  redisToken: process.env.UPSTASH_REDIS_TOKEN ?? '',
-  jwtSecret: process.env.JWT_SECRET ?? 'secret',
-  cookieSecret: process.env.COOKIE_SECRET ?? 'cookie-secret',
-  encryptionMasterKey: process.env.ENCRYPTION_MASTER_KEY ?? '',
-  frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
-  anthropicKey: process.env.ANTHROPIC_API_KEY ?? '',
-  google: {
-    clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-    redirectUri: process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3001/api/google/callback',
-    adsDevToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? ''
-  },
-  resend: {
-    apiKey: process.env.RESEND_API_KEY ?? ''
-  },
-  featureFlags: {
-    useMockGoogleApis: process.env.USE_MOCK_GOOGLE_APIS === 'true',
-    runScheduler: process.env.RUN_SCHEDULER !== 'false'
-  }
+  port: parseInt(process.env.PORT || '3001', 10),
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+  cookieSecret: process.env.COOKIE_SECRET || 'dev-cookie-secret',
+
+  // Clerk
+  clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY,
+  clerkSecretKey: process.env.CLERK_SECRET_KEY,
+  clerkWebhookSecret: process.env.CLERK_WEBHOOK_SECRET,
+
+  // Database
+  databaseUrl: process.env.DATABASE_URL,
+
+  // Redis
+  redisUrl: process.env.UPSTASH_REDIS_URL,
+  redisToken: process.env.UPSTASH_REDIS_TOKEN,
+
+  // Google OAuth
+  googleClientId: process.env.GOOGLE_CLIENT_ID,
+  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
+  googleAdsDeveloperToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
+
+  // AI
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+
+  // AWS
+  awsRegion: process.env.AWS_REGION,
+  awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  kmsKeyId: process.env.KMS_KEY_ID,
+
+  // Email
+  resendApiKey: process.env.RESEND_API_KEY,
+
+  // Feature flags
+  useMockGoogleApis: process.env.USE_MOCK_GOOGLE_APIS === 'true',
+  runScheduler: process.env.RUN_SCHEDULER === 'true',
+
+  // Environment
+  nodeEnv: process.env.NODE_ENV || 'development',
+  isProduction: process.env.NODE_ENV === 'production',
+  isDevelopment: process.env.NODE_ENV === 'development',
 };

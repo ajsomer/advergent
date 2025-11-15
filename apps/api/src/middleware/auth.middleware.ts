@@ -1,72 +1,76 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { db, userSessions, users } from '@/db/index.js';
+import { clerkClient, getAuth } from '@clerk/express';
 import { authLogger } from '@/utils/logger';
-import { eq, and, gt } from 'drizzle-orm';
+import { db, users } from '@/db/index.js';
+import { eq } from 'drizzle-orm';
 
-interface JWTPayload {
-  userId: string;
-  sessionId: string;
-  type: 'access' | 'refresh';
+// Extend Express Request to include Clerk auth
+declare global {
+  namespace Express {
+    interface Request {
+      auth?: {
+        userId: string | null;
+        orgId: string | null;
+        sessionId: string | null;
+      };
+    }
+  }
 }
 
+/**
+ * Clerk authentication middleware
+ * Validates Clerk session token and attaches user/org info to request
+ */
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies?.access_token || req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as JWTPayload;
+    const auth = getAuth(req);
 
-    // Check if session is valid using Drizzle
-    const session = await db
-      .select({ userId: userSessions.userId })
-      .from(userSessions)
-      .where(
-        and(
-          eq(userSessions.id, decoded.sessionId),
-          eq(userSessions.accessToken, token),
-          gt(userSessions.accessTokenExpiresAt, new Date())
-        )
-      )
-      .limit(1);
-
-    if (!session.length) {
-      return res.status(401).json({ error: 'Session expired' });
+    if (!auth.userId) {
+      authLogger.warn('No Clerk userId in request');
+      return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    // Get user details using Drizzle
+    // Optionally fetch user from your database
+    // This allows you to store additional user data beyond what Clerk provides
     const user = await db
-      .select({
-        id: users.id,
-        email: users.email,
-        name: users.name,
-        agencyId: users.agencyId,
-        role: users.role,
-      })
+      .select()
       .from(users)
-      .where(eq(users.id, decoded.userId))
+      .where(eq(users.clerkUserId, auth.userId))
       .limit(1);
 
     if (!user.length) {
+      authLogger.warn({ clerkUserId: auth.userId }, 'User not found in database');
+      // Optionally create user here via webhook sync
       return res.status(401).json({ error: 'User not found' });
     }
 
-    // Convert snake_case to camelCase for backward compatibility
-    (req as any).user = {
-      id: user[0].id,
-      email: user[0].email,
-      name: user[0].name,
-      agency_id: user[0].agencyId,
-      role: user[0].role,
+    // Attach auth info to request
+    req.auth = {
+      userId: auth.userId,
+      orgId: auth.orgId || null,
+      sessionId: auth.sessionId || null,
     };
-    (req as any).sessionId = decoded.sessionId;
+
+    // Attach user data to request for convenience
+    (req as any).user = user[0];
+
+    authLogger.debug({ userId: auth.userId, orgId: auth.orgId }, 'User authenticated');
 
     return next();
   } catch (error) {
-    authLogger.warn({ error }, 'authentication failed');
-    return res.status(401).json({ error: 'Invalid token' });
+    authLogger.error({ error }, 'Authentication failed');
+    return res.status(401).json({ error: 'Invalid session' });
   }
+}
+
+/**
+ * Optional: Require organization context
+ * Use this for routes that should only be accessed within an organization
+ */
+export function requireOrganization(req: Request, res: Response, next: NextFunction) {
+  if (!req.auth?.orgId) {
+    authLogger.warn({ userId: req.auth?.userId }, 'No organization context');
+    return res.status(403).json({ error: 'Organization context required' });
+  }
+  return next();
 }

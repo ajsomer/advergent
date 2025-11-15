@@ -1,14 +1,23 @@
-import { useQuery } from '@tanstack/react-query';
-import { apiClient } from '@/lib/api';
+import { useUser } from '@clerk/clerk-react';
 
+/**
+ * Hook to get current user from Clerk
+ * This replaces the old JWT-based auth
+ */
 export function useAuth() {
-  return useQuery({
-    queryKey: ['me'],
-    queryFn: async () => {
-      const response = await apiClient.get('/api/auth/me');
-      return response.data;
-    },
-    staleTime: 1000 * 60,
-    retry: false
-  });
+  const { user, isLoaded, isSignedIn } = useUser();
+
+  return {
+    user,
+    isLoaded,
+    isSignedIn,
+    // For backwards compatibility with existing code that expects these fields
+    data: user ? {
+      id: user.id,
+      email: user.primaryEmailAddress?.emailAddress,
+      name: user.fullName || user.firstName || 'User',
+    } : null,
+    isLoading: !isLoaded,
+    error: null,
+  };
 }

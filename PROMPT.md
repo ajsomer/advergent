@@ -41,17 +41,18 @@ Digital marketing agencies (10–50+ active clients) such as Overdose Digital, R
 
 ### Backend
 - **Runtime**: Node.js 20+
-- **Framework**: Express.js (TypeScript)
-- **Auth**: JWT (access 15m + refresh 7d) stored in HTTP-only cookies, session table
+- **Framework**: Express.js (TypeScript, ES modules)
+- **Auth**: Clerk (authentication, user management, organizations)
+- **Database ORM**: Drizzle ORM
 - **Validation**: Zod schemas everywhere
 - **Logging**: Pino (pino-http + pino-pretty in dev)
-- **Security**: AES-256-GCM encryption (KMS managed keys), bcrypt (12 rounds)
+- **Security**: Environment-based encryption for OAuth tokens
 
 ### Database
-- **Primary**: Supabase Postgres 15 (managed) with Timescale extension enabled
-- **Access**: `pg` Pool connecting over SSL
-- **Migrations**: node-pg-migrate
-- **Schema**: see “Complete Database Schema” section
+- **Primary**: Neon Postgres (serverless, autoscaling)
+- **Access**: Drizzle ORM with postgres.js driver
+- **Migrations**: Drizzle Kit
+- **Schema**: see "Complete Database Schema" section
 
 ### Job Queue & Cache
 - **Queue**: BullMQ
@@ -69,9 +70,10 @@ Digital marketing agencies (10–50+ active clients) such as Overdose Digital, R
   - Web Service → Express API (apps/api)
   - Background Worker → BullMQ workers + scheduler
   - Render Cron (optional) for backups/cleanup
-- **Database**: Supabase (managed Postgres + Timescale)
+- **Database**: Neon Postgres (serverless, autoscaling)
 - **Redis**: Upstash Redis
-- **Storage**: Render Disk (temp) / Supabase Storage initially; S3 later
+- **Auth**: Clerk (SaaS)
+- **Storage**: Render Disk (temp) / S3 for production
 - **Monitoring**: Pino logs piped to Render logs + Logtail (optional)
 - **Email**: Resend
 
@@ -90,25 +92,23 @@ Create the following structure (Turborepo optional but recommended):
 │   │   │   │   ├── ui/
 │   │   │   │   ├── auth/
 │   │   │   │   ├── onboarding/
+│   │   │   │   ├── layout/
 │   │   │   │   ├── dashboard/
 │   │   │   │   ├── clients/
 │   │   │   │   ├── recommendations/
 │   │   │   │   └── competitors/
 │   │   │   ├── pages/
-│   │   │   │   ├── Login.tsx
-│   │   │   │   ├── Signup.tsx
 │   │   │   │   ├── Dashboard.tsx
 │   │   │   │   ├── Onboarding.tsx
 │   │   │   │   ├── ClientDetail.tsx
 │   │   │   │   ├── Recommendations.tsx
 │   │   │   │   └── Competitors.tsx
 │   │   │   ├── hooks/
-│   │   │   │   ├── useAuth.ts
+│   │   │   │   ├── useAuth.ts (uses Clerk)
 │   │   │   │   ├── useClient.ts
 │   │   │   │   └── useRecommendations.ts
 │   │   │   ├── lib/
-│   │   │   │   ├── api.ts
-│   │   │   │   ├── auth.ts
+│   │   │   │   ├── api.ts (Clerk token injection)
 │   │   │   │   ├── logger.ts
 │   │   │   │   └── utils.ts
 │   │   │   ├── types/
@@ -130,33 +130,39 @@ Create the following structure (Turborepo optional but recommended):
 │   │
 │   └── api/
 │       ├── src/
-│       │   ├── routes/ (auth/agencies/clients/competitors/etc.)
+│       │   ├── routes/
+│       │   │   ├── clerk-webhooks.routes.ts
+│       │   │   ├── agencies.routes.ts
+│       │   │   ├── clients.routes.ts
+│       │   │   ├── recommendations.routes.ts
+│       │   │   ├── competitors.routes.ts
+│       │   │   └── google-oauth.routes.ts
 │       │   ├── services/
-│       │   │   ├── auth.service.ts
-│       │   │   ├── password.service.ts
 │       │   │   ├── encryption.service.ts
 │       │   │   ├── google-ads.service.ts
 │       │   │   ├── google-ads.service.mock.ts
-│       │       ├── search-console.service.ts
-│       │       ├── search-console.service.mock.ts
-│       │       ├── query-matcher.service.ts
-│       │       ├── ai-analyzer.service.ts
-│       │       ├── competitor.service.ts
-│       │       └── recommendation.service.ts
+│       │   │   ├── search-console.service.ts
+│       │   │   ├── search-console.service.mock.ts
+│       │   │   ├── query-matcher.service.ts
+│       │   │   ├── ai-analyzer.service.ts
+│       │   │   ├── competitor.service.ts
+│       │   │   └── recommendation.service.ts
 │       │   ├── workers/
 │       │   │   ├── scheduler.ts
 │       │   │   ├── sync.worker.ts
 │       │   │   ├── analysis.worker.ts
 │       │   │   └── competitor.worker.ts
 │       │   ├── db/
-│       │   │   ├── index.ts
-│       │   │   ├── migrations/
-│       │   │   └── seeds/
+│       │   │   ├── index.ts (Drizzle instance)
+│       │   │   ├── schema.ts (Drizzle schema)
+│       │   │   └── migrations/
 │       │   ├── middleware/
-│       │   │   ├── auth.middleware.ts
+│       │   │   ├── auth.middleware.ts (Clerk validation)
 │       │   │   ├── error.middleware.ts
 │       │   │   ├── logger.middleware.ts
 │       │   │   └── validation.middleware.ts
+│       │   ├── config/
+│       │   │   └── index.ts
 │       │   ├── utils/
 │       │   │   ├── logger.ts
 │       │   │   └── errors.ts
@@ -328,12 +334,13 @@ Use the same robust implementation provided earlier (Zod validation, retry logic
 
 ## SECURITY REQUIREMENTS
 
-1. **Token Encryption**: AES-256-GCM via AWS KMS-managed data keys. All OAuth refresh/access tokens and Claude data snapshots must be encrypted before storing in Postgres.
-2. **Password Hashing**: bcrypt with 12 rounds, algorithm + cost stored per user for future upgrades.
-3. **Session Management**: Access token 15 minutes, refresh 7 days; rotation on every refresh. Sessions tied to DB record so revocation works even if JWT is copied.
-4. **Leader Election**: Use Redis key `scheduler:leader` to prevent duplicate cron job execution.
-5. **Input Validation**: Zod for all incoming payloads and external service responses.
-6. **Logging**: Structured Pino logs with redaction; no secrets in logs.
+1. **Authentication**: Clerk handles all user authentication, session management, and organization membership.
+2. **Token Encryption**: Environment-based encryption for OAuth refresh/access tokens (Google Ads, Search Console) before storing in Neon Postgres.
+3. **Webhook Validation**: Verify Clerk webhook signatures using `svix` library before processing events.
+4. **Leader Election**: Use Redis key `scheduler:leader` to prevent duplicate cron job execution across workers.
+5. **Input Validation**: Zod schemas for all incoming payloads and external service responses (Google APIs, Claude API).
+6. **Logging**: Structured Pino logs with redaction of sensitive fields; no secrets in logs.
+7. **API Security**: Clerk middleware validates session tokens on all protected routes.
 
 ---
 
@@ -375,15 +382,19 @@ Use the same Vite/Tailwind configs described previously. Ensure `VITE_API_URL` d
 NODE_ENV=development
 PORT=3001
 
-# Supabase Postgres
-DATABASE_URL=postgresql://user:password@db.supabase.co:5432/advergent?sslmode=require
+# Neon Postgres
+DATABASE_URL=postgresql://user:password@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
 
-# Redis
-UPSTASH_REDIS_URL=https://your-url.upstash.io
+# Upstash Redis
+UPSTASH_REDIS_URL=https://your-redis.upstash.io
 UPSTASH_REDIS_TOKEN=your-token
 
-# Auth
-JWT_SECRET=change-me
+# Clerk Authentication
+CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+CLERK_WEBHOOK_SECRET=whsec_...
+
+# Cookies
 COOKIE_SECRET=change-me
 
 # Frontend URL
@@ -398,18 +409,12 @@ GOOGLE_ADS_DEVELOPER_TOKEN=...
 # Anthropic
 ANTHROPIC_API_KEY=...
 
-# AWS KMS
-AWS_REGION=ap-southeast-2
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-KMS_KEY_ID=...
-
 # Email
 RESEND_API_KEY=...
 
 # Feature Flags
 USE_MOCK_GOOGLE_APIS=true
-RUN_SCHEDULER=true
+RUN_SCHEDULER=false
 ```
 
 `apps/web/.env.example`
@@ -417,6 +422,7 @@ RUN_SCHEDULER=true
 ```
 VITE_API_URL=http://localhost:3001
 VITE_ENV=development
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_...
 ```
 
 ---
@@ -461,23 +467,28 @@ volumes:
 
 ## COMPLETE DATABASE SCHEMA
 
-(Use the schema from the previous message; ensure it reflects encryption fields, sessions, recommendations, competitors, etc. Replace Neon-specific comments with Supabase references. Keep indexes identical.)
+See `apps/api/src/db/schema.ts` for the complete Drizzle schema including:
+- `agencies` table with `clerk_org_id`
+- `users` table with `clerk_user_id` (no password fields - Clerk handles auth)
+- `client_accounts`, `recommendations`, `competitors`, etc.
+- Encrypted fields for OAuth tokens
+- All necessary indexes and foreign keys
 
 ---
 
 ## IMPLEMENTATION PHASES
 
-### Week 1 – Foundation
-1. Initialize monorepo + workspaces
-2. Scaffold Vite frontend, Express backend
-3. Configure ESLint/Prettier, Pino logging
-4. Connect to local Postgres (Docker) + Supabase (env)
-5. Implement auth (signup/login), bcrypt hashing, JWT rotation
-6. Protected routes + session middleware
+### Week 1 – Foundation ✅
+1. ✅ Initialize monorepo + workspaces
+2. ✅ Scaffold Vite frontend, Express backend
+3. ✅ Configure ESLint/Prettier, Pino logging
+4. ✅ Connect to Neon Postgres with Drizzle ORM
+5. ✅ Integrate Clerk authentication (signup/login, organizations, webhooks)
+6. ✅ Protected routes + Clerk middleware
 
 ### Week 2 – Google OAuth & Data Sync
-1. OAuth credential flow
-2. Token encryption service (KMS)
+1. OAuth credential flow for Google Ads/Search Console
+2. Token encryption service (environment-based)
 3. Google Ads + Search Console service skeletons
 4. Mock services + fixtures for offline dev
 
@@ -500,7 +511,7 @@ volumes:
 ### Week 6 – Polish & Deploy
 1. Error handling, skeleton states, toasts
 2. Build & deploy to Render (web/api/worker)
-3. Wire Supabase + Upstash production envs
+3. Wire Neon + Upstash + Clerk production envs
 4. Smoke tests with real Google accounts
 
 ### Weeks 7–8 – Competitor Intelligence (Phase 2)
@@ -529,19 +540,19 @@ volumes:
 
 ## CRITICAL NOTES FOR THE AI AGENT
 
-1. **Use TypeScript everywhere**
-2. **Follow coding best practices**—clean abstractions, meaningful naming, modular files, minimal duplication, defensive error handling, and unit tests for non-trivial logic.
-3. **Stay modular**—if any file approaches ~500 lines, split logic into smaller hooks/orchestrators/services. Reuse shared utilities, avoid copy/paste, and keep components focused on a single concern.
-4. **Consistent naming conventions**—use `camelCase` for variables/functions, `PascalCase` for classes/types/components, and `snake_case` only for SQL identifiers or environment variable keys. Enforce lint rules accordingly.
-5. **Add Pino logging to all async operations**
-6. **Encrypt tokens before writing to DB**
-7. **Store JWTs in HTTP-only cookies; rotate refresh tokens**
-8. **Implement mock Google services to unblock development**
-9. **Ensure workers are Render-friendly (long-running, not serverless)**
-10. **Validate every request/response with Zod**
-11. **Rate limit Google & Claude APIs**
-12. **Document key decisions in README**
-13. **Security first—no plain text secrets, sanitize inputs**
+1. **Use TypeScript everywhere** - Strict mode enabled in all packages
+2. **Follow coding best practices**—clean abstractions, meaningful naming, modular files, minimal duplication, defensive error handling
+3. **Stay modular**—if any file approaches ~500 lines, split logic into smaller hooks/orchestrators/services
+4. **Consistent naming conventions**—use `camelCase` for variables/functions, `PascalCase` for classes/types/components, and `snake_case` only for database columns and environment variables
+5. **Add Pino logging to all async operations** - Use structured logging with appropriate log levels
+6. **Clerk handles all user authentication** - No custom JWT/session management
+7. **Encrypt Google OAuth tokens before storing in DB** - Use environment-based encryption service
+8. **Implement mock Google services to unblock development** - USE_MOCK_GOOGLE_APIS flag
+9. **Ensure workers are Render-friendly** - Long-running processes, not serverless
+10. **Validate every request/response with Zod** - Especially external API responses
+11. **Rate limit Google & Claude APIs** - Implement backoff and respect quotas
+12. **Verify Clerk webhooks** - Use svix library for signature validation
+13. **Security first**—no plain text secrets, sanitize inputs, redact logs
 
 ---
 

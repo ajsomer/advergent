@@ -22,6 +22,7 @@ export const detectedViaEnum = pgEnum('detected_via', ['auction_insights']);
 
 export const agencies = pgTable('agencies', {
   id: uuid('id').primaryKey().defaultRandom(),
+  clerkOrgId: text('clerk_org_id').unique(),
   name: varchar('name', { length: 255 }).notNull(),
   billingTier: billingTierEnum('billing_tier').notNull(),
   clientLimit: integer('client_limit').notNull(),
@@ -29,41 +30,43 @@ export const agencies = pgTable('agencies', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
+  clerkOrgIdx: index('idx_agencies_clerk_org_id').on(table.clerkOrgId),
   billingTierIdx: index('idx_agencies_billing_tier').on(table.billingTier),
   stripeCustomerIdx: index('idx_agencies_stripe_customer_id').on(table.stripeCustomerId),
 }));
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
+  clerkUserId: text('clerk_user_id').notNull().unique(),
   agencyId: uuid('agency_id').notNull().references(() => agencies.id, { onDelete: 'cascade' }),
   email: varchar('email', { length: 255 }).notNull().unique(),
   name: varchar('name', { length: 255 }).notNull(),
-  passwordHash: text('password_hash').notNull(),
-  passwordAlgorithm: varchar('password_algorithm', { length: 20 }).notNull().default('bcrypt'),
-  passwordCost: integer('password_cost').notNull().default(12),
   role: roleEnum('role').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
+  clerkUserIdx: index('idx_users_clerk_user_id').on(table.clerkUserId),
   agencyIdx: index('idx_users_agency_id').on(table.agencyId),
   emailIdx: index('idx_users_email').on(table.email),
 }));
 
-export const userSessions = pgTable('user_sessions', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  accessToken: text('access_token').notNull(),
-  refreshToken: text('refresh_token').notNull(),
-  accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }).notNull(),
-  refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }).notNull(),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
-  revokedAt: timestamp('revoked_at', { withTimezone: true }),
-}, (table) => ({
-  userIdx: index('idx_user_sessions_user_id').on(table.userId),
-  accessTokenIdx: index('idx_user_sessions_access_token').on(table.accessToken),
-  refreshTokenIdx: index('idx_user_sessions_refresh_token').on(table.refreshToken),
-  expiresIdx: index('idx_user_sessions_expires').on(table.accessTokenExpiresAt, table.refreshTokenExpiresAt),
-}));
+// NOTE: user_sessions table removed - Clerk manages sessions
+// Keeping this commented for reference during migration
+// export const userSessions = pgTable('user_sessions', {
+//   id: uuid('id').primaryKey().defaultRandom(),
+//   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+//   accessToken: text('access_token').notNull(),
+//   refreshToken: text('refresh_token').notNull(),
+//   accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }).notNull(),
+//   refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }).notNull(),
+//   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+//   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+// }, (table) => ({
+//   userIdx: index('idx_user_sessions_user_id').on(table.userId),
+//   accessTokenIdx: index('idx_user_sessions_access_token').on(table.accessToken),
+//   refreshTokenIdx: index('idx_user_sessions_refresh_token').on(table.refreshToken),
+//   expiresIdx: index('idx_user_sessions_expires').on(table.accessTokenExpiresAt, table.refreshTokenExpiresAt),
+// }));
 
 export const clientAccounts = pgTable('client_accounts', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -270,16 +273,17 @@ export const usersRelations = relations(users, ({ one, many }) => ({
     fields: [users.agencyId],
     references: [agencies.id],
   }),
-  sessions: many(userSessions),
+  // sessions removed - Clerk manages sessions
   approvedRecommendations: many(recommendations),
 }));
 
-export const userSessionsRelations = relations(userSessions, ({ one }) => ({
-  user: one(users, {
-    fields: [userSessions.userId],
-    references: [users.id],
-  }),
-}));
+// userSessionsRelations removed - Clerk manages sessions
+// export const userSessionsRelations = relations(userSessions, ({ one }) => ({
+//   user: one(users, {
+//     fields: [userSessions.userId],
+//     references: [users.id],
+//   }),
+// }));
 
 export const clientAccountsRelations = relations(clientAccounts, ({ one, many }) => ({
   agency: one(agencies, {

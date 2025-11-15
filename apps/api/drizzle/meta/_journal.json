@@ -8,6 +8,13 @@
       "when": 1763240245309,
       "tag": "0000_chunky_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1763242813547,
+      "tag": "0001_quick_captain_cross",
+      "breakpoints": true
     }
   ]
 }

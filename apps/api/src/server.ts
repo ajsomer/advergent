@@ -2,10 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
+import { clerkMiddleware } from '@clerk/express';
 import { config } from '@/config';
 import { requestLogger } from '@/middleware/logger.middleware';
 import { errorMiddleware } from '@/middleware/error.middleware';
-import authRoutes from '@/routes/auth.routes';
+import clerkWebhooksRoutes from '@/routes/clerk-webhooks.routes';
 import agencyRoutes from '@/routes/agencies.routes';
 import clientRoutes from '@/routes/clients.routes';
 import recommendationRoutes from '@/routes/recommendations.routes';
@@ -25,9 +26,15 @@ app.use(express.json());
 app.use(cookieParser(config.cookieSecret));
 app.use(requestLogger);
 
+// Webhook routes BEFORE clerkMiddleware (no auth required)
+app.use('/api', clerkWebhooksRoutes);
+
+// Add Clerk middleware to parse and validate tokens
+app.use(clerkMiddleware());
+
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-app.use('/api/auth', authRoutes);
+// Protected routes - use authenticate middleware
 app.use('/api/agency', authenticate, agencyRoutes);
 app.use('/api/clients', authenticate, clientRoutes);
 app.use('/api/recommendations', authenticate, recommendationRoutes);
