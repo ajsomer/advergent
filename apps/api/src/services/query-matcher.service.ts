@@ -1,5 +1,6 @@
 import crypto from 'crypto';
-import { query } from '@/db';
+import { db, searchQueries } from '@/db/index.js';
+import { eq, and } from 'drizzle-orm';
 
 export function normalizeQuery(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ');
@@ -13,23 +14,34 @@ export async function getOrCreateQuery(clientId: string, queryText: string) {
   const normalized = normalizeQuery(queryText);
   const hash = hashQuery(normalized);
 
-  const existing = await query(
-    `SELECT * FROM search_queries WHERE client_account_id = $1 AND query_hash = $2`,
-    [clientId, hash]
-  );
+  // Check if query already exists using Drizzle
+  const existing = await db
+    .select()
+    .from(searchQueries)
+    .where(
+      and(
+        eq(searchQueries.clientAccountId, clientId),
+        eq(searchQueries.queryHash, hash)
+      )
+    )
+    .limit(1);
 
   if (existing.length) {
     return existing[0];
   }
 
-  const inserted = await query(
-    `INSERT INTO search_queries (client_account_id, query_text, query_normalized, query_hash)
-     VALUES ($1, $2, $3, $4)
-     RETURNING *`,
-    [clientId, queryText, normalized, hash]
-  );
+  // Insert new query using Drizzle
+  const [inserted] = await db
+    .insert(searchQueries)
+    .values({
+      clientAccountId: clientId,
+      queryText,
+      queryNormalized: normalized,
+      queryHash: hash,
+    })
+    .returning();
 
-  return inserted[0];
+  return inserted;
 }
 
 export async function matchQueries(_clientId: string) {

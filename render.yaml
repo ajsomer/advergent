@@ -18,6 +18,8 @@ services:
         sync: false
       - key: COOKIE_SECRET
         sync: false
+      - key: ENCRYPTION_MASTER_KEY
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
@@ -27,14 +29,6 @@ services:
       - key: GOOGLE_ADS_DEVELOPER_TOKEN
         sync: false
       - key: RESEND_API_KEY
-        sync: false
-      - key: AWS_REGION
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-      - key: KMS_KEY_ID
         sync: false
 
   - type: worker

@@ -1,0 +1,13 @@
+{
+  "databaseUrlVar": "DATABASE_URL",
+  "migrationsTable": "pgmigrations",
+  "dir": "migrations",
+  "direction": "up",
+  "count": "max",
+  "ignorePattern": "\\..*",
+  "schema": "public",
+  "decamelize": false,
+  "createSchema": false,
+  "createMigrationsSchema": false,
+  "singleTransaction": true
+}
