@@ -1,0 +1,60 @@
+services:
+  - type: web
+    name: advergent-api
+    env: node
+    plan: standard
+    buildCommand: cd apps/api && npm install && npm run build
+    startCommand: node dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_TOKEN
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: COOKIE_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_ADS_DEVELOPER_TOKEN
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: KMS_KEY_ID
+        sync: false
+
+  - type: worker
+    name: advergent-worker
+    env: node
+    plan: standard
+    buildCommand: cd apps/api && npm install && npm run build
+    startCommand: node dist/workers/index.js
+    envVars:
+      - key: RUN_SCHEDULER
+        value: "true"
+      - fromService:
+          type: web
+          name: advergent-api
+          envVarKey: DATABASE_URL
+
+  - type: static_site
+    name: advergent-web
+    buildCommand: cd apps/web && npm install && npm run build
+    publishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://advergent-api.onrender.com

@@ -1,0 +1,14 @@
+{
+  "searchTerms": [
+    {
+      "query": "nike running shoes",
+      "impressions": 8420,
+      "clicks": 127,
+      "cost_micros": 89000000,
+      "conversions": 8.5,
+      "conversion_value_micros": 680000000,
+      "campaign_name": "Nike Brand",
+      "match_type": "PHRASE"
+    }
+  ]
+}

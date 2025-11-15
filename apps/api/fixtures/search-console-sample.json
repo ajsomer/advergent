@@ -1,0 +1,11 @@
+{
+  "queries": [
+    {
+      "query": "nike running shoes",
+      "impressions": 45000,
+      "clicks": 3600,
+      "ctr": 0.08,
+      "position": 2.3
+    }
+  ]
+}
