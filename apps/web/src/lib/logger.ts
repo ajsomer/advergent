@@ -29,8 +29,8 @@ export const logger = pino({
 });
 
 export const log = {
-  debug: (...args: any[]) => logger.debug(...args),
-  info: (...args: any[]) => logger.info(...args),
-  warn: (...args: any[]) => logger.warn(...args),
-  error: (...args: any[]) => logger.error(...args)
+  debug: (msg: string, ...args: any[]) => logger.debug(msg, ...args),
+  info: (msg: string, ...args: any[]) => logger.info(msg, ...args),
+  warn: (msg: string, ...args: any[]) => logger.warn(msg, ...args),
+  error: (msg: string, ...args: any[]) => logger.error(msg, ...args)
 };

@@ -12,18 +12,18 @@ export const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use((config) => {
-  log.debug({ url: config.url, method: config.method }, 'api request');
+  log.debug('api request', { url: config.url, method: config.method });
   return config;
 });
 
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    log.error({
+    log.error('api error', {
       url: error.config?.url,
       status: error.response?.status,
       message: error.message
-    }, 'api error');
+    });
     return Promise.reject(error);
   }
 );
@@ -51,10 +51,10 @@ export function useApiClient() {
             config.headers.Authorization = `Bearer ${token}`;
           }
         } catch (error) {
-          log.error({ error }, 'Failed to get Clerk token');
+          log.error('Failed to get Clerk token', { error });
         }
 
-        log.debug({ url: config.url, method: config.method }, 'api request');
+        log.debug('api request', { url: config.url, method: config.method });
         return config;
       },
       (error) => Promise.reject(error)
@@ -64,11 +64,11 @@ export function useApiClient() {
     instance.interceptors.response.use(
       (response) => response,
       (error) => {
-        log.error({
+        log.error('api error', {
           url: error.config?.url,
           status: error.response?.status,
           message: error.message
-        }, 'api error');
+        });
         return Promise.reject(error);
       }
     );

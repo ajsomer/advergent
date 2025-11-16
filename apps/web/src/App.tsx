@@ -6,6 +6,7 @@ import { Toaster } from '@/components/ui/Toaster';
 import { Layout } from '@/components/layout';
 import Dashboard from '@/pages/Dashboard';
 import Onboarding from '@/pages/Onboarding';
+import SelectAccount from '@/pages/SelectAccount';
 import ClientDetail from '@/pages/ClientDetail';
 import Recommendations from '@/pages/Recommendations';
 import Competitors from '@/pages/Competitors';
@@ -45,6 +46,19 @@ function App() {
                     <Layout>
                       <Onboarding />
                     </Layout>
+                  </SignedIn>
+                  <SignedOut>
+                    <Navigate to="/sign-in" replace />
+                  </SignedOut>
+                </>
+              }
+            />
+            <Route
+              path="/onboarding/select-account"
+              element={
+                <>
+                  <SignedIn>
+                    <SelectAccount />
                   </SignedIn>
                   <SignedOut>
                     <Navigate to="/sign-in" replace />

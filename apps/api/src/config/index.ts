@@ -25,8 +25,12 @@ export const config = {
   googleRedirectUri: process.env.GOOGLE_REDIRECT_URI,
   googleAdsDeveloperToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
 
-  // AI
+  // AI Provider
+  aiProvider: (process.env.AI_PROVIDER || 'anthropic') as 'anthropic' | 'openai',
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+  anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929',
+  openaiApiKey: process.env.OPENAI_API_KEY,
+  openaiModel: process.env.OPENAI_MODEL || 'gpt-5.1',
 
   // AWS
   awsRegion: process.env.AWS_REGION,

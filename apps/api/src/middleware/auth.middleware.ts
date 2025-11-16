@@ -30,18 +30,49 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    // Optionally fetch user from your database
-    // This allows you to store additional user data beyond what Clerk provides
-    const user = await db
+    // Fetch user from database or create if doesn't exist
+    let user = await db
       .select()
       .from(users)
       .where(eq(users.clerkUserId, auth.userId))
       .limit(1);
 
     if (!user.length) {
-      authLogger.warn({ clerkUserId: auth.userId }, 'User not found in database');
-      // Optionally create user here via webhook sync
-      return res.status(401).json({ error: 'User not found' });
+      authLogger.info({ clerkUserId: auth.userId }, 'User not found in database, fetching from Clerk');
+
+      // Fetch user details from Clerk
+      try {
+        const clerkUser = await clerkClient.users.getUser(auth.userId);
+
+        // Create agency first (for now, create a default agency per user)
+        const { agencies } = await import('@/db/schema.js');
+        const [agency] = await db
+          .insert(agencies)
+          .values({
+            name: `${clerkUser.firstName || 'User'}'s Agency`,
+            clerkOrgId: auth.orgId || null,
+            billingTier: 'starter',
+            clientLimit: 5,
+          })
+          .returning();
+
+        // Create user in database
+        user = await db
+          .insert(users)
+          .values({
+            clerkUserId: auth.userId,
+            agencyId: agency.id,
+            email: clerkUser.emailAddresses[0]?.emailAddress || '',
+            name: `${clerkUser.firstName || ''} ${clerkUser.lastName || ''}`.trim() || 'User',
+            role: 'owner',
+          })
+          .returning();
+
+        authLogger.info({ clerkUserId: auth.userId, userId: user[0].id }, 'User auto-created from Clerk');
+      } catch (error) {
+        authLogger.error({ error, clerkUserId: auth.userId }, 'Failed to create user from Clerk');
+        return res.status(500).json({ error: 'Failed to create user' });
+      }
     }
 
     // Attach auth info to request
