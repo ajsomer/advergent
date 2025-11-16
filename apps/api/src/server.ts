@@ -56,7 +56,7 @@ app.use('/api/analysis', authenticate, analysisRoutes);
 app.use(errorMiddleware);
 
 // Start server - bind to 0.0.0.0 for Render compatibility
-const PORT = process.env.PORT || config.port;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : config.port;
 app.listen(PORT, '0.0.0.0', () => {
   logger.info({
     port: PORT,
