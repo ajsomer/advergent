@@ -5,7 +5,8 @@ import { workerLogger } from '@/utils/logger.js';
 
 const redis = new IORedis(process.env.UPSTASH_REDIS_URL || '', {
   lazyConnect: true,
-  password: process.env.UPSTASH_REDIS_TOKEN
+  password: process.env.UPSTASH_REDIS_TOKEN,
+  maxRetriesPerRequest: null
 });
 
 const LEADER_KEY = 'scheduler:leader';

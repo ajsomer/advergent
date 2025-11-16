@@ -9,7 +9,8 @@ import { normalizeQuery, hashQuery } from '@/services/query-matcher.service.js';
 
 const connection = new IORedis(process.env.UPSTASH_REDIS_URL || '', {
   lazyConnect: true,
-  password: process.env.UPSTASH_REDIS_TOKEN
+  password: process.env.UPSTASH_REDIS_TOKEN,
+  maxRetriesPerRequest: null
 });
 
 export const syncQueue = new Queue('sync', { connection });
