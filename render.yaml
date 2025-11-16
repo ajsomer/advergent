@@ -4,7 +4,7 @@ services:
     name: advergent-api
     runtime: node
     plan: starter
-    buildCommand: npm install && cd apps/api && npm run build
+    buildCommand: NODE_ENV=development npm install && cd apps/api && npm run build
     startCommand: cd apps/api && node dist/server.js
     envVars:
       - key: NODE_ENV
@@ -54,7 +54,7 @@ services:
     name: advergent-worker
     runtime: node
     plan: starter
-    buildCommand: npm install && cd apps/api && npm run build
+    buildCommand: NODE_ENV=development npm install && cd apps/api && npm run build
     startCommand: cd apps/api && node dist/workers/index.js
     envVars:
       - key: NODE_ENV
@@ -92,7 +92,7 @@ services:
   - type: web
     name: advergent
     runtime: static
-    buildCommand: npm install && cd apps/web && npm run build
+    buildCommand: NODE_ENV=development npm install && cd apps/web && npm run build
     staticPublishPath: apps/web/dist
     envVars:
       - key: VITE_API_URL
