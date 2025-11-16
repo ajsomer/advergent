@@ -7,9 +7,12 @@ import { eq, and } from 'drizzle-orm';
 import { getSearchAnalytics } from '@/services/search-console.service.js';
 import { normalizeQuery, hashQuery } from '@/services/query-matcher.service.js';
 
-const connection = new IORedis(process.env.UPSTASH_REDIS_URL || '', {
-  lazyConnect: true,
+const connection = new IORedis({
+  host: process.env.UPSTASH_REDIS_URL?.replace('https://', ''),
+  port: 6379,
   password: process.env.UPSTASH_REDIS_TOKEN,
+  tls: {},
+  lazyConnect: true,
   maxRetriesPerRequest: null
 });
 

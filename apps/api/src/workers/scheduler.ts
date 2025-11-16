@@ -3,9 +3,12 @@ import cron from 'node-cron';
 import { syncQueue } from './sync.worker';
 import { workerLogger } from '@/utils/logger.js';
 
-const redis = new IORedis(process.env.UPSTASH_REDIS_URL || '', {
-  lazyConnect: true,
+const redis = new IORedis({
+  host: process.env.UPSTASH_REDIS_URL?.replace('https://', ''),
+  port: 6379,
   password: process.env.UPSTASH_REDIS_TOKEN,
+  tls: {},
+  lazyConnect: true,
   maxRetriesPerRequest: null
 });
 
