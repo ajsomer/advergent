@@ -137,14 +137,20 @@ export const searchConsoleQueries = pgTable('search_console_queries', {
   clicks: integer('clicks').default(0),
   ctr: decimal('ctr', { precision: 5, scale: 4 }),
   position: decimal('position', { precision: 5, scale: 2 }),
+  page: text('page'),
   device: varchar('device', { length: 20 }),
   country: varchar('country', { length: 2 }),
+  searchAppearance: varchar('search_appearance', { length: 50 }),
+  searchType: varchar('search_type', { length: 20 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
   clientIdx: index('idx_search_console_queries_client').on(table.clientAccountId),
   searchQueryIdx: index('idx_search_console_queries_search_query').on(table.searchQueryId),
   dateIdx: index('idx_search_console_queries_date').on(table.date),
-  uniqueIdx: uniqueIndex('idx_search_console_queries_unique').on(table.clientAccountId, table.searchQueryId, table.date, table.device, table.country),
+  pageIdx: index('idx_search_console_queries_page').on(table.page),
+  deviceIdx: index('idx_search_console_queries_device').on(table.device),
+  searchTypeIdx: index('idx_search_console_queries_search_type').on(table.searchType),
+  uniqueIdx: uniqueIndex('idx_search_console_queries_unique').on(table.clientAccountId, table.searchQueryId, table.date, table.page, table.device, table.country, table.searchAppearance, table.searchType),
 }));
 
 export const queryOverlaps = pgTable('query_overlaps', {

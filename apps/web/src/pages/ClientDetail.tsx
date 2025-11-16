@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useClientDetail, useRunAnalysis, useUpdateRecommendationStatus } from '@/hooks/useClientDetail';
+import { useClientDetail, useRunAnalysis, useUpdateRecommendationStatus, useSyncClientData } from '@/hooks/useClientDetail';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,10 +8,11 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert } from '@/components/ui/alert';
 import { RecommendationCard } from '@/components/clients/RecommendationCard';
 import { QueryOverlapTable } from '@/components/clients/QueryOverlapTable';
+import { SearchConsoleTable } from '@/components/clients/SearchConsoleTable';
 import { AnalysisRunForm } from '@/components/clients/AnalysisRunForm';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 
-type TabType = 'overview' | 'recommendations' | 'query-data' | 'analysis';
+type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'analysis';
 
 export default function ClientDetail() {
   const { clientId } = useParams<{ clientId: string }>();
@@ -31,6 +32,7 @@ export default function ClientDetail() {
 
   const runAnalysis = useRunAnalysis(clientId);
   const updateStatus = useUpdateRecommendationStatus(clientId);
+  const syncData = useSyncClientData(clientId);
 
   if (isLoading) {
     return (
@@ -55,6 +57,7 @@ export default function ClientDetail() {
     { id: 'overview' as const, label: 'Overview' },
     { id: 'recommendations' as const, label: 'Recommendations', badge: recommendations?.summary.total },
     { id: 'query-data' as const, label: 'Query Data' },
+    { id: 'search-console' as const, label: 'Search Console', badge: searchConsoleData?.totalQueries },
     { id: 'analysis' as const, label: 'Analysis' },
   ];
 
@@ -63,7 +66,7 @@ export default function ClientDetail() {
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center gap-2 text-sm text-slate-500 mb-2">
-          <Link to="/dashboard" className="hover:text-slate-700 flex items-center gap-1">
+          <Link to="/" className="hover:text-slate-700 flex items-center gap-1">
             <ArrowLeft className="h-4 w-4" />
             Back to Dashboard
           </Link>
@@ -84,15 +87,23 @@ export default function ClientDetail() {
             variant="outline"
             size="sm"
             onClick={() => {
-              refetch.client();
-              refetch.searchConsoleData();
-              refetch.googleAdsData();
-              refetch.queryOverlaps();
-              refetch.recommendations();
+              syncData.mutate(undefined, {
+                onSuccess: () => {
+                  // After sync job is queued, refetch the data
+                  setTimeout(() => {
+                    refetch.client();
+                    refetch.searchConsoleData();
+                    refetch.googleAdsData();
+                    refetch.queryOverlaps();
+                    refetch.recommendations();
+                  }, 2000); // Wait 2 seconds for job to process
+                },
+              });
             }}
+            disabled={syncData.isPending}
           >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh Data
+            <RefreshCw className={`h-4 w-4 mr-2 ${syncData.isPending ? 'animate-spin' : ''}`} />
+            {syncData.isPending ? 'Syncing...' : 'Refresh Data'}
           </Button>
         </div>
       </div>
@@ -250,6 +261,46 @@ export default function ClientDetail() {
                 <QueryOverlapTable overlaps={queryOverlaps?.overlaps || []} />
               </CardContent>
             </Card>
+          </div>
+        )}
+
+        {activeTab === 'search-console' && (
+          <div className="space-y-6">
+            {searchConsoleData && searchConsoleData.queries.length > 0 ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Search Console Performance</CardTitle>
+                  <CardDescription>
+                    Organic search performance from Google Search Console over the last 30 days
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <SearchConsoleTable queries={searchConsoleData.queries} />
+                  <div className="mt-4 text-sm text-slate-500 text-right">
+                    Data from {new Date(searchConsoleData.dateRange.startDate).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}{' '}
+                    to{' '}
+                    {new Date(searchConsoleData.dateRange.endDate).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <p className="text-slate-500 text-lg">No Search Console data available</p>
+                  <p className="text-sm text-slate-400 mt-2">
+                    Connect Search Console in the onboarding flow to see organic performance data
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </div>
         )}
 

@@ -615,7 +615,7 @@ router.post('/:id/analyze', async (req: Request, res: Response) => {
   if (analysisHandler) {
     // Rewrite params to match analysis route format
     req.params.clientId = req.params.id;
-    return analysisHandler(req, res);
+    return analysisHandler(req, res, () => {});
   }
 
   res.status(500).json({ error: 'Analysis handler not found' });
@@ -631,10 +631,51 @@ router.get('/:id/competitors', (_req, res) => {
 
 /**
  * POST /api/clients/:id/sync
- * Trigger manual data sync for a client (Phase 2 - placeholder)
+ * Trigger manual data sync for a client from Google Ads and Search Console
  */
-router.post('/:id/sync', (_req, res) => {
-  res.json({ message: 'manual sync placeholder' });
+router.post('/:id/sync', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = (req as any).user;
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify client exists and belongs to user's agency
+    const [client] = await db
+      .select()
+      .from(clientAccounts)
+      .where(and(eq(clientAccounts.id, id), eq(clientAccounts.agencyId, user.agencyId)))
+      .limit(1);
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Queue sync job for this client
+    const { syncQueue } = await import('@/workers/sync.worker.js');
+
+    const job = await syncQueue.add('manual-sync', {
+      clientId: id,
+      type: 'manual',
+      trigger: 'user_refresh',
+    });
+
+    logger.info(
+      { clientId: id, jobId: job.id, userId: user.id },
+      'Manual sync job queued'
+    );
+
+    res.json({
+      success: true,
+      message: 'Data sync initiated',
+      jobId: job.id,
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to initiate manual sync');
+    res.status(500).json({ error: 'Failed to initiate data sync' });
+  }
 });
 
 export default router;

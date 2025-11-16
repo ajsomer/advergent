@@ -19,7 +19,8 @@ interface SearchConsoleProperty {
   permissionLevel: string;
 }
 
-type AccountOrProperty = GoogleAdsAccount | SearchConsoleProperty;
+// Type union for future type narrowing features
+// type AccountOrProperty = GoogleAdsAccount | SearchConsoleProperty;
 
 export default function SelectAccount() {
   const navigate = useNavigate();

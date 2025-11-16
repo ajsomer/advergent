@@ -1,10 +1,63 @@
 services:
+  # Web API Service
   - type: web
     name: advergent-api
-    env: node
-    plan: standard
+    runtime: node
+    region: oregon
+    plan: starter
     buildCommand: cd apps/api && npm install && npm run build
-    startCommand: node dist/server.js
+    startCommand: cd apps/api && node dist/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_URL
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: UPSTASH_REDIS_TOKEN
+        sync: false
+      - key: CLERK_PUBLISHABLE_KEY
+        sync: false
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_WEBHOOK_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        value: https://advergent.onrender.com
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://advergent-api.onrender.com/api/google/callback
+      - key: GOOGLE_ADS_DEVELOPER_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AWS_REGION
+        value: ap-southeast-2
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: KMS_KEY_ID
+        sync: false
+      - key: USE_MOCK_GOOGLE_APIS
+        value: false
+      - key: RUN_SCHEDULER
+        value: false
+    healthCheckPath: /api/health
+
+  # Background Worker Service
+  - type: worker
+    name: advergent-worker
+    runtime: node
+    region: oregon
+    plan: starter
+    buildCommand: cd apps/api && npm install && npm run build
+    startCommand: cd apps/api && node dist/workers/index.js
     envVars:
       - key: NODE_ENV
         value: production
@@ -14,13 +67,9 @@ services:
         sync: false
       - key: UPSTASH_REDIS_TOKEN
         sync: false
-      - key: JWT_SECRET
+      - key: CLERK_PUBLISHABLE_KEY
         sync: false
-      - key: COOKIE_SECRET
-        sync: false
-      - key: ENCRYPTION_MASTER_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
+      - key: CLERK_SECRET_KEY
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
@@ -28,27 +77,34 @@ services:
         sync: false
       - key: GOOGLE_ADS_DEVELOPER_TOKEN
         sync: false
-      - key: RESEND_API_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false
-
-  - type: worker
-    name: advergent-worker
-    env: node
-    plan: standard
-    buildCommand: cd apps/api && npm install && npm run build
-    startCommand: node dist/workers/index.js
-    envVars:
+      - key: AWS_REGION
+        value: ap-southeast-2
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: KMS_KEY_ID
+        sync: false
       - key: RUN_SCHEDULER
-        value: "true"
-      - fromService:
-          type: web
-          name: advergent-api
-          envVarKey: DATABASE_URL
+        value: true
 
-  - type: static_site
-    name: advergent-web
+  # Frontend Static Site
+  - type: web
+    name: advergent
+    runtime: static
+    region: oregon
     buildCommand: cd apps/web && npm install && npm run build
-    publishPath: dist
+    staticPublishPath: apps/web/dist
     envVars:
       - key: VITE_API_URL
         value: https://advergent-api.onrender.com
+      - key: VITE_ENV
+        value: production
+      - key: VITE_CLERK_PUBLISHABLE_KEY
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

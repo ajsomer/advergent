@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { db, users, agencies, userSessions, searchQueries } from './db/index.js';
+import { db, users, agencies, searchQueries } from './db/index.js';
 import { dbLogger } from './utils/logger.js';
 import { eq } from 'drizzle-orm';
 
@@ -10,6 +10,7 @@ async function testMigrations() {
     // Test 1: Create a test agency
     dbLogger.info('Test 1: Creating test agency...');
     const [agency] = await db.insert(agencies).values({
+      clerkOrgId: 'test_org_' + Date.now(),
       name: 'Test Agency',
       billingTier: 'starter',
       clientLimit: 5,
@@ -19,10 +20,10 @@ async function testMigrations() {
     // Test 2: Create a test user
     dbLogger.info('Test 2: Creating test user...');
     const [user] = await db.insert(users).values({
+      clerkUserId: 'test_user_' + Date.now(),
       agencyId: agency.id,
       email: 'test@example.com',
       name: 'Test User',
-      passwordHash: 'hashed_password',
       role: 'owner',
     }).returning();
     dbLogger.info({ userId: user.id }, '✅ User created');

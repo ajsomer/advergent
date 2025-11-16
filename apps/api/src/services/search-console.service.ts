@@ -13,6 +13,11 @@ export interface SearchConsoleQuery {
   ctr: number;
   position: number;
   date: string;
+  page?: string;
+  device?: string;
+  country?: string;
+  searchAppearance?: string;
+  searchType?: string;
 }
 
 export interface SearchConsoleProperty {
@@ -99,7 +104,7 @@ export async function getSearchAnalytics(
       requestBody: {
         startDate, // YYYY-MM-DD format
         endDate,
-        dimensions: ['query', 'date'],
+        dimensions: ['query', 'date', 'page', 'device', 'country', 'searchAppearance', 'searchType'],
         rowLimit: 25000,
         dataState: 'all', // Include fresh data (not just final)
       },
@@ -115,6 +120,11 @@ export async function getSearchAnalytics(
         results.push({
           query: row.keys[0] || '',
           date: row.keys[1] || '',
+          page: row.keys[2] || undefined,
+          device: row.keys[3] || undefined,
+          country: row.keys[4] || undefined,
+          searchAppearance: row.keys[5] || undefined,
+          searchType: row.keys[6] || undefined,
           impressions: row.impressions || 0,
           clicks: row.clicks || 0,
           ctr: row.ctr || 0,

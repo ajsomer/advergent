@@ -17,6 +17,9 @@ import analysisRoutes from './routes/analysis.routes.js';
 import { authenticate } from './middleware/auth.middleware.js';
 import { logger } from './utils/logger.js';
 
+// Import sync worker to start processing jobs
+import './workers/sync.worker.js';
+
 const app = express();
 
 // CORS configuration - allow multiple origins in development

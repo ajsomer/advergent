@@ -13,6 +13,11 @@ export interface SearchConsoleQuery {
   ctr: number;
   position: number;
   date: string;
+  page?: string;
+  device?: string;
+  country?: string;
+  searchAppearance?: string;
+  searchType?: string;
 }
 
 export interface SearchConsoleDataResponse {
@@ -279,6 +284,25 @@ export function useUpdateRecommendationStatus(clientId: string) {
     onSuccess: () => {
       // Invalidate recommendations query to refetch
       queryClient.invalidateQueries({ queryKey: ['client', clientId, 'recommendations'] });
+    },
+  });
+}
+
+/**
+ * Trigger manual data sync for a client
+ */
+export function useSyncClientData(clientId: string) {
+  const apiClient = useApiClient();
+  const queryClient = useQueryClient();
+
+  return useMutation<{ success: boolean; message: string; jobId: string }, Error>({
+    mutationFn: async () => {
+      const { data } = await apiClient.post(`/api/clients/${clientId}/sync`);
+      return data;
+    },
+    onSuccess: () => {
+      // Invalidate all client data queries to refetch
+      queryClient.invalidateQueries({ queryKey: ['client', clientId] });
     },
   });
 }

@@ -14,8 +14,8 @@ interface AnalysisRunFormProps {
 }
 
 export function AnalysisRunForm({
-  clientId,
-  onAnalysisComplete,
+  // clientId is passed but not used directly - available for future features
+  onAnalysisComplete: _onAnalysisComplete,
   isRunning,
   onRun,
 }: AnalysisRunFormProps) {
@@ -34,10 +34,11 @@ export function AnalysisRunForm({
     onRun(config);
   };
 
-  const handleResultsUpdate = (newResults: AnalysisResult) => {
-    setResults(newResults);
-    onAnalysisComplete(newResults);
-  };
+  // handleResultsUpdate is defined for future use when implementing real-time updates
+  // const handleResultsUpdate = (newResults: AnalysisResult) => {
+  //   setResults(newResults);
+  //   onAnalysisComplete(newResults);
+  // };
 
   return (
     <div className="space-y-6">

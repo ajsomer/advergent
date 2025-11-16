@@ -1,6 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
-import { db, clientAccounts, googleAdsQueries, searchConsoleQueries, searchQueries } from '@/db/index.js';
+import {
+  db,
+  clientAccounts,
+  googleAdsQueries as googleAdsQueriesTable,
+  searchConsoleQueries as searchConsoleQueriesTable,
+  searchQueries
+} from '@/db/index.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { logger } from '@/utils/logger.js';
 import { findOverlappingQueries, sortBySpend, filterBySpendThreshold } from '@/services/query-matcher.service.js';
@@ -43,30 +49,32 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
     // Fetch recent Google Ads queries (last 30 days)
     const adsData = await db
       .select({
-        query: googleAdsQueries.query,
-        cpc: googleAdsQueries.avgCpc,
-        spend: googleAdsQueries.cost,
-        clicks: googleAdsQueries.clicks,
-        conversions: googleAdsQueries.conversions,
-        conversionValue: googleAdsQueries.conversionValue,
+        query: searchQueries.queryText,
+        cpc: googleAdsQueriesTable.avgCpcMicros,
+        spend: googleAdsQueriesTable.costMicros,
+        clicks: googleAdsQueriesTable.clicks,
+        conversions: googleAdsQueriesTable.conversions,
+        impressions: googleAdsQueriesTable.impressions,
       })
-      .from(googleAdsQueries)
-      .where(eq(googleAdsQueries.clientAccountId, clientId))
-      .orderBy(desc(googleAdsQueries.date))
+      .from(googleAdsQueriesTable)
+      .innerJoin(searchQueries, eq(googleAdsQueriesTable.searchQueryId, searchQueries.id))
+      .where(eq(googleAdsQueriesTable.clientAccountId, clientId))
+      .orderBy(desc(googleAdsQueriesTable.date))
       .limit(1000);
 
     // Fetch recent Search Console queries (last 30 days)
     const scData = await db
       .select({
-        query: searchConsoleQueries.query,
-        position: searchConsoleQueries.position,
-        ctr: searchConsoleQueries.ctr,
-        impressions: searchConsoleQueries.impressions,
-        clicks: searchConsoleQueries.clicks,
+        query: searchQueries.queryText,
+        position: searchConsoleQueriesTable.position,
+        ctr: searchConsoleQueriesTable.ctr,
+        impressions: searchConsoleQueriesTable.impressions,
+        clicks: searchConsoleQueriesTable.clicks,
       })
-      .from(searchConsoleQueries)
-      .where(eq(searchConsoleQueries.clientAccountId, clientId))
-      .orderBy(desc(searchConsoleQueries.date))
+      .from(searchConsoleQueriesTable)
+      .innerJoin(searchQueries, eq(searchConsoleQueriesTable.searchQueryId, searchQueries.id))
+      .where(eq(searchConsoleQueriesTable.clientAccountId, clientId))
+      .orderBy(desc(searchConsoleQueriesTable.date))
       .limit(1000);
 
     analysisLogger.info(
@@ -95,11 +103,11 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
     // Convert to GoogleAdsQuery and SearchConsoleQuery format
     const googleAdsQueries: GoogleAdsQuery[] = adsData.map((row) => ({
       query: row.query,
-      cpc: parseFloat(row.cpc?.toString() || '0'),
-      spend: parseFloat(row.spend?.toString() || '0'),
+      cpc: parseFloat(row.cpc?.toString() || '0') / 1000000, // Convert micros to currency
+      spend: parseFloat(row.spend?.toString() || '0') / 1000000, // Convert micros to currency
       clicks: row.clicks || 0,
-      conversions: row.conversions || 0,
-      conversionValue: parseFloat(row.conversionValue?.toString() || '0'),
+      conversions: parseFloat(row.conversions?.toString() || '0'),
+      conversionValue: 0, // Not stored in database yet, placeholder for future
     }));
 
     const searchConsoleQueries: SearchConsoleQuery[] = scData.map((row) => ({
