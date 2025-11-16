@@ -7,13 +7,22 @@ import { eq, and } from 'drizzle-orm';
 import { getSearchAnalytics } from '@/services/search-console.service.js';
 import { normalizeQuery, hashQuery } from '@/services/query-matcher.service.js';
 
+// Parse Upstash Redis URL properly
+const redisUrl = process.env.UPSTASH_REDIS_URL || '';
+const redisHost = redisUrl.replace('https://', '').replace('http://', '');
+
 const connection = new IORedis({
-  host: process.env.UPSTASH_REDIS_URL?.replace('https://', ''),
+  host: redisHost,
   port: 6379,
   password: process.env.UPSTASH_REDIS_TOKEN,
-  tls: {},
+  tls: {
+    servername: redisHost, // SNI for TLS
+  },
+  family: 4, // Force IPv4
   lazyConnect: true,
-  maxRetriesPerRequest: null
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+  enableOfflineQueue: false,
 });
 
 export const syncQueue = new Queue('sync', { connection });

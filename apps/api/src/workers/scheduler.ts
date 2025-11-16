@@ -1,15 +1,24 @@
 import IORedis from 'ioredis';
 import cron from 'node-cron';
-import { syncQueue } from './sync.worker';
+import { syncQueue } from './sync.worker.js';
 import { workerLogger } from '@/utils/logger.js';
 
+// Parse Upstash Redis URL properly
+const redisUrl = process.env.UPSTASH_REDIS_URL || '';
+const redisHost = redisUrl.replace('https://', '').replace('http://', '');
+
 const redis = new IORedis({
-  host: process.env.UPSTASH_REDIS_URL?.replace('https://', ''),
+  host: redisHost,
   port: 6379,
   password: process.env.UPSTASH_REDIS_TOKEN,
-  tls: {},
+  tls: {
+    servername: redisHost, // SNI for TLS
+  },
+  family: 4, // Force IPv4
   lazyConnect: true,
-  maxRetriesPerRequest: null
+  maxRetriesPerRequest: null,
+  enableReadyCheck: false,
+  enableOfflineQueue: false,
 });
 
 const LEADER_KEY = 'scheduler:leader';

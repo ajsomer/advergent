@@ -1,5 +1,5 @@
-import './sync.worker';
-import { startScheduler } from './scheduler';
+import './sync.worker.js';
+import { startScheduler } from './scheduler.js';
 import { workerLogger } from '@/utils/logger.js';
 
 startScheduler();
