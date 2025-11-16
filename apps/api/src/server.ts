@@ -55,10 +55,14 @@ app.use('/api/analysis', authenticate, analysisRoutes);
 
 app.use(errorMiddleware);
 
-if (!process.env.RENDER) {
-  app.listen(config.port, () => {
-    logger.info({ port: config.port }, 'API server started');
-  });
-}
+// Start server - bind to 0.0.0.0 for Render compatibility
+const PORT = process.env.PORT || config.port;
+app.listen(PORT, '0.0.0.0', () => {
+  logger.info({
+    port: PORT,
+    env: process.env.NODE_ENV,
+    platform: process.env.RENDER ? 'render' : 'local'
+  }, 'API server started');
+});
 
 export default app;
