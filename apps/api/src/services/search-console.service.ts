@@ -104,7 +104,7 @@ export async function getSearchAnalytics(
       requestBody: {
         startDate, // YYYY-MM-DD format
         endDate,
-        dimensions: ['query', 'date', 'page', 'device', 'country', 'searchAppearance', 'searchType'],
+        dimensions: ['query', 'date', 'page', 'device', 'country', 'searchAppearance'],
         rowLimit: 25000,
         dataState: 'all', // Include fresh data (not just final)
       },
@@ -124,7 +124,7 @@ export async function getSearchAnalytics(
           device: row.keys[3] || undefined,
           country: row.keys[4] || undefined,
           searchAppearance: row.keys[5] || undefined,
-          searchType: row.keys[6] || undefined,
+          searchType: 'web', // Default to 'web' since we're not filtering by type
           impressions: row.impressions || 0,
           clicks: row.clicks || 0,
           ctr: row.ctr || 0,

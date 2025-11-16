@@ -14,6 +14,7 @@ import competitorRoutes from './routes/competitors.routes.js';
 import googleOAuthRoutes from './routes/google-oauth.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import analysisRoutes from './routes/analysis.routes.js';
+import debugRoutes from './routes/debug.routes.js';
 import { authenticate } from './middleware/auth.middleware.js';
 import { logger } from './utils/logger.js';
 
@@ -52,6 +53,7 @@ app.use('/api/competitors', authenticate, competitorRoutes);
 app.use('/api/google', authenticate, googleOAuthRoutes);
 app.use('/api/dashboard', authenticate, dashboardRoutes);
 app.use('/api/analysis', authenticate, analysisRoutes);
+app.use('/api/debug', debugRoutes); // Debug endpoint - remove in production
 
 app.use(errorMiddleware);
 
