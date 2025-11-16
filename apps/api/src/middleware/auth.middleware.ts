@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { clerkClient, getAuth } from '@clerk/express';
-import { authLogger } from '@/utils/logger';
+import { authLogger } from '@/utils/logger.js';
 import { db, users } from '@/db/index.js';
 import { eq } from 'drizzle-orm';
 

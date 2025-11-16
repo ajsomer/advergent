@@ -1,7 +1,7 @@
 import IORedis from 'ioredis';
 import cron from 'node-cron';
 import { syncQueue } from './sync.worker';
-import { workerLogger } from '@/utils/logger';
+import { workerLogger } from '@/utils/logger.js';
 
 const redis = new IORedis(process.env.UPSTASH_REDIS_URL || '', {
   lazyConnect: true,

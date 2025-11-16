@@ -1,6 +1,6 @@
 import './sync.worker';
 import { startScheduler } from './scheduler';
-import { workerLogger } from '@/utils/logger';
+import { workerLogger } from '@/utils/logger.js';
 
 startScheduler();
 

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { logger } from '@/utils/logger';
+import { logger } from '@/utils/logger.js';
 
 export function errorMiddleware(error: any, _req: Request, res: Response, _next: NextFunction) {
   logger.error({ error: error.message, stack: error.stack }, 'request failed');
