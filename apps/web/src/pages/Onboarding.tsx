@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 
-type OnboardingStep = 'create-client' | 'connect-google-ads' | 'connect-search-console' | 'complete';
+type OnboardingStep = 'create-client' | 'connect-google-ads' | 'connect-search-console' | 'connect-ga4' | 'complete';
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -22,6 +22,7 @@ export default function Onboarding() {
   const [error, setError] = useState<string | null>(null);
   const [googleAdsConnected, setGoogleAdsConnected] = useState(false);
   const [searchConsoleConnected, setSearchConsoleConnected] = useState(false);
+  const [ga4Connected, setGa4Connected] = useState(false);
 
   // Check for OAuth callback parameters
   useEffect(() => {
@@ -45,6 +46,9 @@ export default function Onboarding() {
         setCurrentStep('connect-search-console');
       } else if (serviceParam === 'search_console') {
         setSearchConsoleConnected(true);
+        setCurrentStep('connect-ga4');
+      } else if (serviceParam === 'ga4') {
+        setGa4Connected(true);
         setCurrentStep('complete');
       }
     }
@@ -118,6 +122,27 @@ export default function Onboarding() {
   };
 
   const handleSkipSearchConsole = () => {
+    setCurrentStep('connect-ga4');
+  };
+
+  const handleConnectGA4 = async () => {
+    if (!clientId) return;
+    setLoading(true);
+    try {
+      const { data } = await api.get('/api/google/auth/initiate', {
+        params: {
+          clientId,
+          service: 'ga4',
+        },
+      });
+      window.location.href = data.authUrl;
+    } catch (err) {
+      setError('Failed to initiate GA4 connection');
+      setLoading(false);
+    }
+  };
+
+  const handleSkipGA4 = () => {
     setCurrentStep('complete');
   };
 
@@ -129,6 +154,7 @@ export default function Onboarding() {
     { key: 'create-client', label: 'Create Client', completed: !!clientId },
     { key: 'connect-google-ads', label: 'Connect Google Ads', completed: googleAdsConnected },
     { key: 'connect-search-console', label: 'Connect Search Console', completed: searchConsoleConnected },
+    { key: 'connect-ga4', label: 'Connect GA4', completed: ga4Connected },
     { key: 'complete', label: 'Complete', completed: currentStep === 'complete' },
   ];
 
@@ -141,13 +167,12 @@ export default function Onboarding() {
             {steps.map((step, index) => (
               <div key={step.key} className="flex items-center flex-1">
                 <div className="flex flex-col items-center">
-                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
-                    step.completed
-                      ? 'bg-blue-600 text-white'
-                      : currentStep === step.key
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-full ${step.completed
+                    ? 'bg-blue-600 text-white'
+                    : currentStep === step.key
                       ? 'bg-blue-100 text-blue-600 border-2 border-blue-600'
                       : 'bg-slate-200 text-slate-400'
-                  }`}>
+                    }`}>
                     {step.completed ? (
                       <CheckCircle2 className="w-6 h-6" />
                     ) : (
@@ -157,9 +182,8 @@ export default function Onboarding() {
                   <span className="mt-2 text-sm font-medium text-slate-700">{step.label}</span>
                 </div>
                 {index < steps.length - 1 && (
-                  <div className={`flex-1 h-1 mx-4 ${
-                    step.completed ? 'bg-blue-600' : 'bg-slate-200'
-                  }`} />
+                  <div className={`flex-1 h-1 mx-4 ${step.completed ? 'bg-blue-600' : 'bg-slate-200'
+                    }`} />
                 )}
               </div>
             ))}
@@ -296,6 +320,54 @@ export default function Onboarding() {
             </>
           )}
 
+          {currentStep === 'connect-ga4' && (
+            <>
+              <CardHeader>
+                <CardTitle>Connect Google Analytics 4</CardTitle>
+                <CardDescription>
+                  Connect GA4 to analyze user engagement and conversion metrics
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {searchConsoleConnected && (
+                  <div className="p-4 bg-green-50 rounded-lg border border-green-200 mb-4">
+                    <div className="flex items-start">
+                      <CheckCircle2 className="w-5 h-5 text-green-600 mt-0.5 mr-2" />
+                      <div>
+                        <h4 className="font-semibold text-green-900">Search Console Connected</h4>
+                        <p className="text-sm text-green-700">Your Search Console property is now connected</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                  <h4 className="font-semibold text-blue-900 mb-2">What you'll need:</h4>
+                  <ul className="list-disc list-inside text-sm text-blue-800 space-y-1">
+                    <li>Access to your client's GA4 property</li>
+                    <li>Viewer or higher permissions</li>
+                  </ul>
+                </div>
+
+                <div className="flex space-x-3">
+                  <Button onClick={handleConnectGA4} disabled={loading}>
+                    {loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Connecting...
+                      </>
+                    ) : (
+                      'Connect GA4'
+                    )}
+                  </Button>
+                  <Button variant="outline" onClick={handleSkipGA4}>
+                    Skip for Now
+                  </Button>
+                </div>
+              </CardContent>
+            </>
+          )}
+
           {currentStep === 'complete' && (
             <>
               <CardHeader>
@@ -327,6 +399,12 @@ export default function Onboarding() {
                       <div className="flex items-center text-sm text-green-800">
                         <CheckCircle2 className="w-4 h-4 mr-2" />
                         Search Console connected
+                      </div>
+                    )}
+                    {ga4Connected && (
+                      <div className="flex items-center text-sm text-green-800">
+                        <CheckCircle2 className="w-4 h-4 mr-2" />
+                        GA4 connected
                       </div>
                     )}
                   </div>

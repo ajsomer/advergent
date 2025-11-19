@@ -98,33 +98,105 @@ export async function getSearchAnalytics(
       'Fetching Search Console analytics'
     );
 
-    // Make API request
-    const response = await webmasters.searchanalytics.query({
+    // 1. Discovery Phase: Get available Search Appearance types
+    const appearanceMap = new Map<string, Set<string>>(); // Key: "query|date", Value: Set<Appearance>
+
+    try {
+      logger.info('Discovering available Search Appearance types...');
+      const appearanceList = await webmasters.searchanalytics.query({
+        siteUrl,
+        requestBody: {
+          startDate,
+          endDate,
+          dimensions: ['searchAppearance'],
+          rowLimit: 25 // There are usually only a few types
+        }
+      });
+
+      const appearances = appearanceList.data.rows?.map(r => r.keys?.[0]).filter(Boolean) as string[] || [];
+      logger.info({ appearances }, 'Found Search Appearance types');
+
+      // 2. Targeted Fetching Phase: Get queries for each appearance
+      for (const appearance of appearances) {
+        logger.info({ appearance }, `Fetching queries for appearance: ${appearance}`);
+
+        // We fetch in batches if needed, but for now simple pagination
+        const queryData = await webmasters.searchanalytics.query({
+          siteUrl,
+          requestBody: {
+            startDate,
+            endDate,
+            dimensions: ['query', 'date'],
+            dimensionFilterGroups: [{
+              filters: [{
+                dimension: 'searchAppearance',
+                operator: 'equals',
+                expression: appearance
+              }]
+            }],
+            rowLimit: 25000,
+            dataState: 'all'
+          }
+        });
+
+        if (queryData.data.rows) {
+          let count = 0;
+          for (const row of queryData.data.rows) {
+            const query = row.keys?.[0];
+            const date = row.keys?.[1];
+            if (query && date) {
+              const key = `${query}|${date}`;
+              if (!appearanceMap.has(key)) {
+                appearanceMap.set(key, new Set());
+              }
+              appearanceMap.get(key)?.add(appearance);
+              count++;
+            }
+          }
+          logger.info({ appearance, count }, `Mapped queries for appearance`);
+        }
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Failed to fetch Search Appearance data, proceeding with primary data only');
+    }
+
+    // 3. Primary Fetch Phase: Get main detailed report
+    logger.info('Fetching primary detailed report...');
+    const primaryResponse = await webmasters.searchanalytics.query({
       siteUrl,
       requestBody: {
-        startDate, // YYYY-MM-DD format
+        startDate,
         endDate,
-        dimensions: ['query', 'date', 'page', 'device', 'country', 'searchAppearance'],
+        dimensions: ['query', 'date', 'page', 'device', 'country'],
         rowLimit: 25000,
-        dataState: 'all', // Include fresh data (not just final)
+        dataState: 'all',
       },
     });
 
-    // Transform results
     const results: SearchConsoleQuery[] = [];
 
-    if (response.data.rows) {
-      for (const row of response.data.rows) {
+    if (primaryResponse.data.rows) {
+      for (const row of primaryResponse.data.rows) {
         if (!row.keys) continue;
 
+        const query = row.keys[0] || '';
+        const date = row.keys[1] || '';
+        const key = `${query}|${date}`;
+
+        // Look up appearance data
+        let searchAppearance: string | undefined;
+        if (appearanceMap.has(key)) {
+          searchAppearance = Array.from(appearanceMap.get(key)!).join(', ');
+        }
+
         results.push({
-          query: row.keys[0] || '',
-          date: row.keys[1] || '',
+          query,
+          date,
           page: row.keys[2] || undefined,
           device: row.keys[3] || undefined,
           country: row.keys[4] || undefined,
-          searchAppearance: row.keys[5] || undefined,
-          searchType: 'web', // Default to 'web' since we're not filtering by type
+          searchAppearance,
+          searchType: 'web',
           impressions: row.impressions || 0,
           clicks: row.clicks || 0,
           ctr: row.ctr || 0,
@@ -134,7 +206,7 @@ export async function getSearchAnalytics(
     }
 
     logger.info(
-      { clientAccountId, siteUrl, recordCount: results.length },
+      { clientAccountId, siteUrl, recordCount: results.length, appearanceMapSize: appearanceMap.size },
       'Search Console analytics fetched successfully'
     );
 
@@ -286,7 +358,7 @@ export async function verifyPropertyAccess(
 
     // If we get a response with permission level, user has access
     const hasAccess = !!response.data.permissionLevel &&
-                      response.data.permissionLevel !== 'siteUnverifiedUser';
+      response.data.permissionLevel !== 'siteUnverifiedUser';
 
     logger.info({ siteUrl, hasAccess }, 'Property access verification complete');
 

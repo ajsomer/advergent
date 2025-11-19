@@ -40,7 +40,7 @@ export interface QueryOverlap {
     clicks: number;
     conversions: number;
     conversionValue: number;
-  };
+  } | null;
   searchConsole: {
     position: number;
     ctr: number;
@@ -189,24 +189,30 @@ export function findOverlappingQueries(
  * Calculate total spend for a set of overlapping queries
  */
 export function calculateTotalSpend(overlaps: QueryOverlap[]): number {
-  return overlaps.reduce((total, overlap) => total + overlap.googleAds.spend, 0);
+  return overlaps.reduce((total, overlap) => total + (overlap.googleAds?.spend || 0), 0);
 }
 
 /**
  * Filter overlaps by minimum spend threshold
+ * Skips filtering if there's no Ads data
  */
 export function filterBySpendThreshold(
   overlaps: QueryOverlap[],
   minSpend: number
 ): QueryOverlap[] {
-  return overlaps.filter(overlap => overlap.googleAds.spend >= minSpend);
+  return overlaps.filter(overlap => !overlap.googleAds || overlap.googleAds.spend >= minSpend);
 }
 
 /**
  * Sort overlaps by spend (descending)
+ * Queries without Ads data are sorted to the end
  */
 export function sortBySpend(overlaps: QueryOverlap[]): QueryOverlap[] {
-  return [...overlaps].sort((a, b) => b.googleAds.spend - a.googleAds.spend);
+  return [...overlaps].sort((a, b) => {
+    const aSpend = a.googleAds?.spend || 0;
+    const bSpend = b.googleAds?.spend || 0;
+    return bSpend - aSpend;
+  });
 }
 
 /**

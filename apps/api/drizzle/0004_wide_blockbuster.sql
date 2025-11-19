@@ -1,0 +1,1 @@
+ALTER TABLE "search_console_queries" ALTER COLUMN "country" SET DATA TYPE varchar(3);

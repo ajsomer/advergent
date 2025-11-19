@@ -54,10 +54,11 @@ Digital marketing agencies (10–50+ active clients) such as Overdose Digital, R
 - **Migrations**: Drizzle Kit
 - **Schema**: see "Complete Database Schema" section
 
-### Job Queue & Cache
-- **Queue**: BullMQ
-- **Redis**: Upstash Redis (serverless) for queues + leader election
-- **Purpose**: Scheduled syncs, AI analysis, email jobs
+### Background Jobs
+- **Scheduled Syncs**: Render Cron Jobs (daily at 2 AM UTC)
+- **Manual Syncs**: Direct service calls via API endpoint (fire-and-forget)
+- **Concurrency Control**: Database-enforced partial unique index
+- **Purpose**: Daily data syncs, manual refresh triggers
 
 ### External APIs
 - **AI**: Anthropic Claude Sonnet 4
@@ -68,10 +69,9 @@ Digital marketing agencies (10–50+ active clients) such as Overdose Digital, R
 ### Infrastructure
 - **App Hosting**: Render
   - Web Service → Express API (apps/api)
-  - Background Worker → BullMQ workers + scheduler
-  - Render Cron (optional) for backups/cleanup
+  - Cron Job → Daily data sync (2 AM UTC)
+  - Static Site → React frontend (apps/web)
 - **Database**: Neon Postgres (serverless, autoscaling)
-- **Redis**: Upstash Redis
 - **Auth**: Clerk (SaaS)
 - **Storage**: Render Disk (temp) / S3 for production
 - **Monitoring**: Pino logs piped to Render logs + Logtail (optional)
@@ -275,10 +275,6 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
-      - key: UPSTASH_REDIS_URL
-        sync: false
-      - key: UPSTASH_REDIS_TOKEN
-        sync: false
       - key: JWT_SECRET
         sync: false
       - key: COOKIE_SECRET
@@ -316,13 +312,7 @@ services:
         value: https://advergent-api.onrender.com
 ```
 
-*Note*: Render’s worker will run BullMQ schedulers and workers (no serverless limitations). Use Render Cron jobs if you want OS-level scheduling; otherwise rely on the distributed scheduler (see below).
-
----
-
-## BULLMQ & DISTRIBUTED SCHEDULER
-
-Use Upstash Redis + BullMQ with Redis `SETNX` leader election (see `apps/api/src/workers/scheduler.ts` snippet from previous prompt). Ensure scheduler only runs inside the worker process on Render (set `RUN_SCHEDULER=true` env var).
+*Note*: Render Cron Jobs handle scheduled syncs. Manual syncs are triggered via API endpoints with fire-and-forget execution. Database-level concurrency control prevents duplicate syncs.
 
 ---
 
@@ -384,10 +374,6 @@ PORT=3001
 
 # Neon Postgres
 DATABASE_URL=postgresql://user:password@ep-xxx.region.aws.neon.tech/neondb?sslmode=require
-
-# Upstash Redis
-UPSTASH_REDIS_URL=https://your-redis.upstash.io
-UPSTASH_REDIS_TOKEN=your-token
 
 # Clerk Authentication
 CLERK_PUBLISHABLE_KEY=pk_test_...
@@ -497,11 +483,12 @@ See `apps/api/src/db/schema.ts` for the complete Drizzle schema including:
 2. Claude integration with Zod validation
 3. Recommendation storage with encrypted snapshots
 
-### Week 4 – Workers & Scheduling
-1. BullMQ + Upstash Redis integration
-2. Distributed scheduler with leader election
-3. Sync worker, analysis worker, competitor worker
-4. Render worker deployment (RUN_SCHEDULER flag)
+### Week 4 – Scheduling & Background Jobs
+1. Create client-sync.service.ts for reusable sync logic
+2. Create daily-sync.ts cron job script
+3. Add database concurrency control (partial unique index)
+4. Update manual sync endpoint with fire-and-forget execution
+5. Configure Render Cron Job service
 
 ### Week 5 – Frontend MVP
 1. Onboarding flow, dashboards, recommendation list/detail
@@ -510,8 +497,8 @@ See `apps/api/src/db/schema.ts` for the complete Drizzle schema including:
 
 ### Week 6 – Polish & Deploy
 1. Error handling, skeleton states, toasts
-2. Build & deploy to Render (web/api/worker)
-3. Wire Neon + Upstash + Clerk production envs
+2. Build & deploy to Render (web/api/cron job)
+3. Wire Neon + Clerk production envs
 4. Smoke tests with real Google accounts
 
 ### Weeks 7–8 – Competitor Intelligence (Phase 2)
@@ -529,7 +516,7 @@ See `apps/api/src/db/schema.ts` for the complete Drizzle schema including:
 3. Daily sync pulls data and generates Claude recommendations
 4. Recommendations visible + actionable in dashboard
 5. Approval/reject flow updates recommendation status
-6. BullMQ scheduler runs exactly once per day per client (leader election working)
+6. Render cron job runs daily syncs successfully with concurrency control
 
 **Phase 2**
 1. Competitors auto-detected via Auction Insights
@@ -548,8 +535,7 @@ See `apps/api/src/db/schema.ts` for the complete Drizzle schema including:
 6. **Clerk handles all user authentication** - No custom JWT/session management
 7. **Encrypt Google OAuth tokens before storing in DB** - Use environment-based encryption service
 8. **Implement mock Google services to unblock development** - USE_MOCK_GOOGLE_APIS flag
-9. **Ensure workers are Render-friendly** - Long-running processes, not serverless
-10. **Validate every request/response with Zod** - Especially external API responses
+9. **Validate every request/response with Zod** - Especially external API responses
 11. **Rate limit Google & Claude APIs** - Implement backoff and respect quotas
 12. **Verify Clerk webhooks** - Use svix library for signature validation
 13. **Security first**—no plain text secrets, sanitize inputs, redact logs

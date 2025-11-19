@@ -1,5 +1,5 @@
 import { pgTable, uuid, varchar, timestamp, integer, text, boolean, date, decimal, bigint, check, index, uniqueIndex, pgEnum } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 // ============================================================================
 // ENUMS
@@ -78,6 +78,9 @@ export const clientAccounts = pgTable('client_accounts', {
   searchConsoleSiteUrl: varchar('search_console_site_url', { length: 500 }),
   searchConsoleRefreshTokenEncrypted: text('search_console_refresh_token_encrypted'),
   searchConsoleRefreshTokenKeyVersion: integer('search_console_refresh_token_key_version').default(1),
+  ga4PropertyId: varchar('ga4_property_id', { length: 50 }),
+  ga4RefreshTokenEncrypted: text('ga4_refresh_token_encrypted'),
+  ga4RefreshTokenKeyVersion: integer('ga4_refresh_token_key_version').default(1),
   syncFrequency: varchar('sync_frequency', { length: 20 }).default('daily'),
   isActive: boolean('is_active').default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
@@ -139,7 +142,7 @@ export const searchConsoleQueries = pgTable('search_console_queries', {
   position: decimal('position', { precision: 5, scale: 2 }),
   page: text('page'),
   device: varchar('device', { length: 20 }),
-  country: varchar('country', { length: 2 }),
+  country: varchar('country', { length: 3 }),
   searchAppearance: varchar('search_appearance', { length: 50 }),
   searchType: varchar('search_type', { length: 20 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
@@ -230,6 +233,47 @@ export const competitorMetrics = pgTable('competitor_metrics', {
   uniqueIdx: uniqueIndex('idx_competitor_metrics_unique').on(table.competitorId, table.date),
 }));
 
+export const ga4Metrics = pgTable('ga4_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  date: date('date').notNull(),
+  sessions: integer('sessions').default(0),
+  engagementRate: decimal('engagement_rate', { precision: 5, scale: 4 }),
+  viewsPerSession: decimal('views_per_session', { precision: 5, scale: 2 }),
+  conversions: decimal('conversions', { precision: 10, scale: 2 }).default('0'),
+  totalRevenue: decimal('total_revenue', { precision: 12, scale: 2 }).default('0'),
+  averageSessionDuration: decimal('average_session_duration', { precision: 10, scale: 2 }),
+  bounceRate: decimal('bounce_rate', { precision: 5, scale: 4 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_ga4_metrics_client').on(table.clientAccountId),
+  dateIdx: index('idx_ga4_metrics_date').on(table.date),
+  uniqueIdx: uniqueIndex('idx_ga4_metrics_unique').on(table.clientAccountId, table.date),
+}));
+
+export const ga4LandingPageMetrics = pgTable('ga4_landing_page_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  date: date('date').notNull(),
+  landingPage: text('landing_page').notNull(),
+  sessionSource: varchar('session_source', { length: 100 }),
+  sessionMedium: varchar('session_medium', { length: 100 }),
+  sessions: integer('sessions').default(0),
+  engagementRate: decimal('engagement_rate', { precision: 5, scale: 4 }),
+  conversions: decimal('conversions', { precision: 10, scale: 2 }).default('0'),
+  totalRevenue: decimal('total_revenue', { precision: 12, scale: 2 }).default('0'),
+  averageSessionDuration: decimal('average_session_duration', { precision: 10, scale: 2 }),
+  bounceRate: decimal('bounce_rate', { precision: 5, scale: 4 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_ga4_landing_page_metrics_client').on(table.clientAccountId),
+  dateIdx: index('idx_ga4_landing_page_metrics_date').on(table.date),
+  pageIdx: index('idx_ga4_landing_page_metrics_page').on(table.landingPage),
+  sourceMediumIdx: index('idx_ga4_landing_page_metrics_source_medium').on(table.sessionSource, table.sessionMedium),
+  uniqueIdx: uniqueIndex('idx_ga4_landing_page_metrics_unique').on(table.clientAccountId, table.date, table.landingPage, table.sessionSource, table.sessionMedium),
+}));
+
+
 // ============================================================================
 // JOB TRACKING
 // ============================================================================
@@ -245,7 +289,15 @@ export const syncJobs = pgTable('sync_jobs', {
   recordsProcessed: integer('records_processed').default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
-  clientIdx: index('idx_sync_jobs_client').on(table.clientAccountId),
+  // Add partial unique index for active jobs (pending/running)
+  activePerClientIdx: uniqueIndex('idx_sync_jobs_active_per_client')
+    .on(table.clientAccountId)
+    .where(sql`status IN ('pending', 'running')`),
+
+  // Add regular index for all client lookups
+  clientAllIdx: index('idx_sync_jobs_client_all').on(table.clientAccountId),
+
+  // Keep existing indexes
   statusIdx: index('idx_sync_jobs_status').on(table.status),
   createdAtIdx: index('idx_sync_jobs_created_at').on(table.createdAt),
 }));
@@ -302,6 +354,8 @@ export const clientAccountsRelations = relations(clientAccounts, ({ one, many })
   queryOverlaps: many(queryOverlaps),
   recommendations: many(recommendations),
   competitors: many(competitors),
+  ga4Metrics: many(ga4Metrics),
+  ga4LandingPageMetrics: many(ga4LandingPageMetrics),
   syncJobs: many(syncJobs),
 }));
 
@@ -379,6 +433,21 @@ export const competitorMetricsRelations = relations(competitorMetrics, ({ one })
     references: [competitors.id],
   }),
 }));
+
+export const ga4MetricsRelations = relations(ga4Metrics, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [ga4Metrics.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+}));
+
+export const ga4LandingPageMetricsRelations = relations(ga4LandingPageMetrics, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [ga4LandingPageMetrics.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+}));
+
 
 export const syncJobsRelations = relations(syncJobs, ({ one }) => ({
   clientAccount: one(clientAccounts, {

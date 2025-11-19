@@ -7,11 +7,17 @@ import {
   googleAdsQueries,
   searchQueries,
   queryOverlaps,
-  recommendations
+  recommendations,
+  syncJobs,
+  ga4Metrics,
+  ga4LandingPageMetrics,
 } from '@/db/schema.js';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, sql, or } from 'drizzle-orm';
 import { logger } from '@/utils/logger.js';
 import { getClientRecommendations } from '@/services/recommendation-storage.service.js';
+import { runClientSync } from '@/services/client-sync.service.js';
+import { analyzeSearchConsoleData } from '@/services/ai-analyzer.service.js';
+import { contentFetcher } from '@/services/content-fetcher.service.js';
 
 const router = Router();
 
@@ -256,6 +262,11 @@ router.get('/:id/search-console-data', async (req: Request, res: Response) => {
         avgCtr: sql<number>`AVG(${searchConsoleQueries.ctr})`,
         avgPosition: sql<number>`AVG(${searchConsoleQueries.position})`,
         latestDate: sql<string>`MAX(${searchConsoleQueries.date})::text`,
+        page: sql<string>`STRING_AGG(DISTINCT ${searchConsoleQueries.page}, ', ')`,
+        device: sql<string>`STRING_AGG(DISTINCT ${searchConsoleQueries.device}, ', ')`,
+        country: sql<string>`STRING_AGG(DISTINCT ${searchConsoleQueries.country}, ', ')`,
+        searchAppearance: sql<string>`STRING_AGG(DISTINCT ${searchConsoleQueries.searchAppearance}, ', ')`,
+        searchType: sql<string>`STRING_AGG(DISTINCT ${searchConsoleQueries.searchType}, ', ')`,
       })
       .from(searchConsoleQueries)
       .innerJoin(searchQueries, eq(searchConsoleQueries.searchQueryId, searchQueries.id))
@@ -278,7 +289,16 @@ router.get('/:id/search-console-data', async (req: Request, res: Response) => {
       ctr: parseFloat(row.avgCtr?.toString() || '0'),
       position: parseFloat(row.avgPosition?.toString() || '0'),
       date: row.latestDate,
+      page: row.page || undefined,
+      device: row.device || undefined,
+      country: row.country || undefined,
+      searchAppearance: row.searchAppearance || undefined,
+      searchType: row.searchType || undefined,
     }));
+
+    if (queries.length > 0) {
+      logger.info({ firstQuery: queries[0] }, 'Search Console Data Debug');
+    }
 
     res.json({
       queries,
@@ -291,6 +311,361 @@ router.get('/:id/search-console-data', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, 'Failed to fetch Search Console data');
     res.status(500).json({ error: 'Failed to fetch Search Console data' });
+  }
+});
+
+/**
+ * GET /api/clients/:id/ga4-data
+ * Fetch recent GA4 metrics data for a client
+ */
+router.get('/:id/ga4-data', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = (req as any).user;
+    const days = parseInt(req.query.days as string) || 30;
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify client exists and belongs to user's agency
+    const [client] = await db
+      .select()
+      .from(clientAccounts)
+      .where(and(eq(clientAccounts.id, id), eq(clientAccounts.agencyId, user.agencyId)))
+      .limit(1);
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Calculate date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    // Fetch GA4 metrics
+    const ga4Data = await db
+      .select()
+      .from(ga4Metrics)
+      .where(
+        and(
+          eq(ga4Metrics.clientAccountId, id),
+          sql`${ga4Metrics.date} >= ${startDate.toISOString().split('T')[0]}`,
+          sql`${ga4Metrics.date} <= ${endDate.toISOString().split('T')[0]}`
+        )
+      )
+      .orderBy(desc(ga4Metrics.date));
+
+    const metrics = ga4Data.map((row) => ({
+      date: row.date,
+      sessions: row.sessions || 0,
+      engagementRate: parseFloat(row.engagementRate?.toString() || '0'),
+      viewsPerSession: parseFloat(row.viewsPerSession?.toString() || '0'),
+      conversions: parseFloat(row.conversions?.toString() || '0'),
+      totalRevenue: parseFloat(row.totalRevenue?.toString() || '0'),
+      averageSessionDuration: parseFloat(row.averageSessionDuration?.toString() || '0'),
+      bounceRate: parseFloat(row.bounceRate?.toString() || '0'),
+    }));
+
+    res.json({
+      metrics,
+      totalMetrics: metrics.length,
+      dateRange: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+      },
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to fetch GA4 data');
+    res.status(500).json({ error: 'Failed to fetch GA4 data' });
+  }
+});
+
+/**
+ * GET /api/clients/:id/ga4-landing-pages
+ * Fetch recent GA4 landing page metrics for a client
+ */
+router.get('/:id/ga4-landing-pages', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = (req as any).user;
+    const days = parseInt(req.query.days as string) || 30;
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify client exists and belongs to user's agency
+    const [client] = await db
+      .select()
+      .from(clientAccounts)
+      .where(and(eq(clientAccounts.id, id), eq(clientAccounts.agencyId, user.agencyId)))
+      .limit(1);
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Calculate date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    // Import ga4LandingPageMetrics
+    const { ga4LandingPageMetrics } = await import('@/db/schema.js');
+
+    // Fetch and aggregate GA4 landing page metrics
+    const ga4PageData = await db
+      .select({
+        landingPage: ga4LandingPageMetrics.landingPage,
+        sessionSource: ga4LandingPageMetrics.sessionSource,
+        sessionMedium: ga4LandingPageMetrics.sessionMedium,
+        sessions: sql<number>`CAST(SUM(${ga4LandingPageMetrics.sessions}) AS INTEGER)`,
+        avgEngagementRate: sql<number>`AVG(${ga4LandingPageMetrics.engagementRate})`,
+        conversions: sql<number>`SUM(${ga4LandingPageMetrics.conversions})`,
+        totalRevenue: sql<number>`SUM(${ga4LandingPageMetrics.totalRevenue})`,
+        avgSessionDuration: sql<number>`AVG(${ga4LandingPageMetrics.averageSessionDuration})`,
+        avgBounceRate: sql<number>`AVG(${ga4LandingPageMetrics.bounceRate})`,
+        latestDate: sql<string>`MAX(${ga4LandingPageMetrics.date})::text`,
+      })
+      .from(ga4LandingPageMetrics)
+      .where(
+        and(
+          eq(ga4LandingPageMetrics.clientAccountId, id),
+          sql`${ga4LandingPageMetrics.date} >= ${startDate.toISOString().split('T')[0]}`,
+          sql`${ga4LandingPageMetrics.date} <= ${endDate.toISOString().split('T')[0]}`
+        )
+      )
+      .groupBy(
+        ga4LandingPageMetrics.landingPage,
+        ga4LandingPageMetrics.sessionSource,
+        ga4LandingPageMetrics.sessionMedium
+      )
+      .orderBy(desc(sql`SUM(${ga4LandingPageMetrics.sessions})`))
+      .limit(100);
+
+    const pages = ga4PageData.map((row) => ({
+      landingPage: row.landingPage,
+      sessionSource: row.sessionSource || 'unknown',
+      sessionMedium: row.sessionMedium || 'unknown',
+      sessions: row.sessions || 0,
+      engagementRate: parseFloat(row.avgEngagementRate?.toString() || '0'),
+      conversions: parseFloat(row.conversions?.toString() || '0'),
+      totalRevenue: parseFloat(row.totalRevenue?.toString() || '0'),
+      averageSessionDuration: parseFloat(row.avgSessionDuration?.toString() || '0'),
+      bounceRate: parseFloat(row.avgBounceRate?.toString() || '0'),
+      date: row.latestDate,
+    }));
+
+    res.json({
+      pages,
+      totalPages: pages.length,
+      dateRange: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+      },
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to fetch GA4 landing page metrics');
+    res.status(500).json({ error: 'Failed to fetch GA4 landing page metrics' });
+  }
+});
+
+
+/**
+ * POST /api/clients/:id/search-console/analyze
+ * Analyze Search Console data using AI
+ */
+router.post('/:id/search-console/analyze', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = (req as any).user;
+    const days = parseInt(req.query.days as string) || 30;
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify client exists and belongs to user's agency
+    const [client] = await db
+      .select()
+      .from(clientAccounts)
+      .where(and(eq(clientAccounts.id, id), eq(clientAccounts.agencyId, user.agencyId)))
+      .limit(1);
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Calculate date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    // Fetch aggregated Search Console data (reusing logic from GET route)
+    const scData = await db
+      .select({
+        queryText: searchQueries.queryText,
+        impressions: sql<number>`CAST(SUM(${searchConsoleQueries.impressions}) AS INTEGER)`,
+        clicks: sql<number>`CAST(SUM(${searchConsoleQueries.clicks}) AS INTEGER)`,
+        avgCtr: sql<number>`AVG(${searchConsoleQueries.ctr})`,
+        avgPosition: sql<number>`AVG(${searchConsoleQueries.position})`,
+        page: sql<string>`MAX(${searchConsoleQueries.page})`, // Get the most frequent page for this query (simplified)
+      })
+      .from(searchConsoleQueries)
+      .innerJoin(searchQueries, eq(searchConsoleQueries.searchQueryId, searchQueries.id))
+      .where(
+        and(
+          eq(searchConsoleQueries.clientAccountId, id),
+          sql`${searchConsoleQueries.date} >= ${startDate.toISOString().split('T')[0]}`,
+          sql`${searchConsoleQueries.date} <= ${endDate.toISOString().split('T')[0]}`
+        )
+      )
+      .groupBy(searchQueries.id, searchQueries.queryText)
+      .orderBy(desc(sql`SUM(${searchConsoleQueries.impressions})`))
+      .limit(20); // Limit to top 20 for analysis context
+
+    const queries = scData.map((row) => ({
+      query: row.queryText,
+      impressions: row.impressions || 0,
+      clicks: row.clicks || 0,
+      ctr: parseFloat(row.avgCtr?.toString() || '0'),
+      position: parseFloat(row.avgPosition?.toString() || '0'),
+      page: row.page,
+    }));
+
+    // Fetch GA4 landing page data for correlation
+    const ga4LandingPageData = await db
+      .select({
+        landingPage: ga4LandingPageMetrics.landingPage,
+        sessionSource: ga4LandingPageMetrics.sessionSource,
+        sessionMedium: ga4LandingPageMetrics.sessionMedium,
+        sessions: sql<number>`SUM(${ga4LandingPageMetrics.sessions})`,
+        engagementRate: sql<number>`AVG(${ga4LandingPageMetrics.engagementRate})`,
+        bounceRate: sql<number>`AVG(${ga4LandingPageMetrics.bounceRate})`,
+        conversions: sql<number>`SUM(${ga4LandingPageMetrics.conversions})`,
+        totalRevenue: sql<number>`SUM(${ga4LandingPageMetrics.totalRevenue})`,
+        averageSessionDuration: sql<number>`AVG(${ga4LandingPageMetrics.averageSessionDuration})`,
+      })
+      .from(ga4LandingPageMetrics)
+      .where(
+        and(
+          eq(ga4LandingPageMetrics.clientAccountId, id),
+          eq(ga4LandingPageMetrics.sessionMedium, 'organic'),
+          eq(ga4LandingPageMetrics.sessionSource, 'google'),
+          sql`${ga4LandingPageMetrics.date} >= ${startDate.toISOString().split('T')[0]}`,
+          sql`${ga4LandingPageMetrics.date} <= ${endDate.toISOString().split('T')[0]}`
+        )
+      )
+      .groupBy(
+        ga4LandingPageMetrics.landingPage,
+        ga4LandingPageMetrics.sessionSource,
+        ga4LandingPageMetrics.sessionMedium
+      );
+
+    // Create a map of landing pages to GA4 metrics for easy lookup
+    const ga4MetricsMap = new Map<string, typeof ga4LandingPageData[0]>();
+    ga4LandingPageData.forEach(metric => {
+      ga4MetricsMap.set(metric.landingPage, metric);
+    });
+
+    // Enrich queries with GA4 landing page data
+    const enrichedQueries = queries.map(query => {
+      const ga4Data = query.page ? ga4MetricsMap.get(query.page) : undefined;
+      return {
+        ...query,
+        ga4Engagement: ga4Data ? {
+          sessions: Number(ga4Data.sessions) || 0,
+          engagementRate: Number(ga4Data.engagementRate) || 0,
+          bounceRate: Number(ga4Data.bounceRate) || 0,
+          conversions: Number(ga4Data.conversions) || 0,
+          revenue: Number(ga4Data.totalRevenue) || 0,
+          avgSessionDuration: Number(ga4Data.averageSessionDuration) || 0,
+        } : undefined
+      };
+    });
+
+    // Group queries by landing page for intelligent analysis
+    const queriesByPage = new Map<string, typeof enrichedQueries>();
+    enrichedQueries.forEach(query => {
+      if (query.page) {
+        if (!queriesByPage.has(query.page)) {
+          queriesByPage.set(query.page, []);
+        }
+        queriesByPage.get(query.page)!.push(query);
+      }
+    });
+
+    logger.info({
+      queryCount: enrichedQueries.length,
+      pagesWithGA4: ga4LandingPageData.length,
+      landingPageGroups: queriesByPage.size,
+      clientId: id
+    }, 'Enriched queries with GA4 data for Search Console analysis');
+
+    // Identify the top landing page from the fetched queries
+    // We group by page and sum impressions to find the most relevant one
+    const pageMap = new Map<string, number>();
+    queries.forEach(q => {
+      if (q.page) {
+        pageMap.set(q.page, (pageMap.get(q.page) || 0) + q.impressions);
+      }
+    });
+
+    // Sort pages by total impressions
+    const sortedPages = Array.from(pageMap.entries()).sort((a, b) => b[1] - a[1]);
+    const topPageUrl = sortedPages.length > 0 ? sortedPages[0][0] : null;
+
+    let pageAnalysisData = undefined;
+    if (topPageUrl) {
+      logger.info({ topPageUrl }, 'Fetching content for top landing page');
+      const content = await contentFetcher.fetchPageContent(topPageUrl);
+      if (content) {
+        pageAnalysisData = {
+          url: topPageUrl,
+          content
+        };
+      }
+    }
+
+    // Run AI Analysis with enriched data
+    logger.info({ queryCount: enrichedQueries.length, clientId: id }, 'Calling analyzeSearchConsoleData with GA4 enrichment');
+    const analysis = await analyzeSearchConsoleData(
+      {
+        queries: enrichedQueries,
+        totalQueries: enrichedQueries.length,
+        dateRange: {
+          startDate: startDate.toISOString().split('T')[0],
+          endDate: endDate.toISOString().split('T')[0],
+        },
+        queriesByLandingPage: Array.from(queriesByPage.entries()).map(([page, pageQueries]) => ({
+          page,
+          queries: pageQueries,
+          totalImpressions: pageQueries.reduce((sum, q) => sum + q.impressions, 0),
+          totalClicks: pageQueries.reduce((sum, q) => sum + q.clicks, 0),
+          ga4Metrics: ga4MetricsMap.get(page) ? {
+            sessions: Number(ga4MetricsMap.get(page)!.sessions) || 0,
+            engagementRate: Number(ga4MetricsMap.get(page)!.engagementRate) || 0,
+            bounceRate: Number(ga4MetricsMap.get(page)!.bounceRate) || 0,
+            conversions: Number(ga4MetricsMap.get(page)!.conversions) || 0,
+            revenue: Number(ga4MetricsMap.get(page)!.totalRevenue) || 0,
+          } : undefined
+        }))
+      },
+      {
+        // Optional: Fetch client context from DB if available
+        industry: undefined,
+        targetMarket: undefined
+      },
+      pageAnalysisData
+    );
+
+    res.json(analysis);
+
+  } catch (error) {
+    logger.error({ error }, 'Failed to analyze Search Console data');
+    res.status(500).json({ error: 'Failed to analyze Search Console data' });
   }
 });
 
@@ -615,7 +990,7 @@ router.post('/:id/analyze', async (req: Request, res: Response) => {
   if (analysisHandler) {
     // Rewrite params to match analysis route format
     req.params.clientId = req.params.id;
-    return analysisHandler(req, res, () => {});
+    return analysisHandler(req, res, () => { });
   }
 
   res.status(500).json({ error: 'Analysis handler not found' });
@@ -653,24 +1028,88 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    // Queue sync job for this client
-    const { syncQueue } = await import('@/workers/sync.worker.js');
+    // Fail stale pending jobs (e.g., server crashed before async work kicked off)
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    await db
+      .update(syncJobs)
+      .set({
+        status: 'failed',
+        completedAt: new Date(),
+        errorMessage: 'Sync timed out before starting',
+      })
+      .where(and(
+        eq(syncJobs.clientAccountId, id),
+        eq(syncJobs.status, 'pending'),
+        sql`${syncJobs.startedAt} < ${fiveMinutesAgo}`
+      ));
 
-    const job = await syncQueue.add('manual-sync', {
-      clientId: id,
-      type: 'manual',
-      trigger: 'user_refresh',
-    });
+    // Try to insert new sync job (status 'pending')
+    // The unique partial index will prevent concurrent syncs atomically
+    let syncJob;
+    try {
+      [syncJob] = await db
+        .insert(syncJobs)
+        .values({
+          clientAccountId: id,
+          jobType: 'full_sync',
+          status: 'pending',
+          startedAt: new Date(),
+        })
+        .returning();
+    } catch (error: any) {
+      // Unique constraint violation = sync already running
+      if (error.code === '23505' && error.constraint === 'idx_sync_jobs_active_per_client') {
+        // Find the existing active job
+        const [activeJob] = await db
+          .select()
+          .from(syncJobs)
+          .where(and(
+            eq(syncJobs.clientAccountId, id),
+            or(
+              eq(syncJobs.status, 'pending'),
+              eq(syncJobs.status, 'running')
+            )
+          ))
+          .orderBy(desc(syncJobs.createdAt))
+          .limit(1);
+
+        return res.status(409).json({
+          success: false,
+          message: 'Sync already in progress',
+          jobId: activeJob?.id || null,
+        });
+      }
+      // Other DB errors - re-throw
+      throw error;
+    }
 
     logger.info(
-      { clientId: id, jobId: job.id, userId: user.id },
-      'Manual sync job queued'
+      { clientId: id, userId: user.id, jobId: syncJob.id },
+      'Manual sync initiated'
     );
 
-    res.json({
+    // Return 202 Accepted with jobId
+    res.status(202).json({
       success: true,
       message: 'Data sync initiated',
-      jobId: job.id,
+      jobId: syncJob.id,
+    });
+
+    // Fire-and-forget execution
+    setImmediate(() => {
+      runClientSync(id, 'manual', syncJob.id)
+        .then(result => {
+          logger.info(
+            { clientId: id, userId: user.id, jobId: syncJob.id, recordsProcessed: result.recordsProcessed },
+            'Manual sync completed successfully'
+          );
+        })
+        .catch(error => {
+          logger.error(
+            { clientId: id, userId: user.id, jobId: syncJob.id, error },
+            'Manual sync failed'
+          );
+        });
     });
   } catch (error) {
     logger.error({ error }, 'Failed to initiate manual sync');

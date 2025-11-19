@@ -18,9 +18,6 @@ import debugRoutes from './routes/debug.routes.js';
 import { authenticate } from './middleware/auth.middleware.js';
 import { logger } from './utils/logger.js';
 
-// Import sync worker to start processing jobs
-import './workers/sync.worker.js';
-
 const app = express();
 
 // CORS configuration - allow multiple origins in development
@@ -65,6 +62,23 @@ app.listen(PORT, '0.0.0.0', () => {
     env: process.env.NODE_ENV,
     platform: process.env.RENDER ? 'render' : 'local'
   }, 'API server started');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason: Error, promise: Promise<any>) => {
+  logger.fatal({ err: reason }, 'Unhandled Rejection at Promise');
+  // Don't exit in dev, but log it
+  if (config.isProduction) {
+    process.exit(1);
+  }
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error: Error) => {
+  logger.fatal({ err: error }, 'Uncaught Exception');
+  if (config.isProduction) {
+    process.exit(1);
+  }
 });
 
 export default app;

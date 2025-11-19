@@ -51,6 +51,49 @@ export interface GoogleAdsDataResponse {
   };
 }
 
+export interface GA4Metric {
+  date: string;
+  sessions: number;
+  engagementRate: number;
+  viewsPerSession: number;
+  conversions: number;
+  totalRevenue: number;
+  averageSessionDuration: number;
+  bounceRate: number;
+}
+
+export interface GA4DataResponse {
+  metrics: GA4Metric[];
+  totalMetrics: number;
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+}
+
+export interface GA4LandingPageMetric {
+  landingPage: string;
+  sessionSource: string;
+  sessionMedium: string;
+  sessions: number;
+  engagementRate: number;
+  conversions: number;
+  totalRevenue: number;
+  averageSessionDuration: number;
+  bounceRate: number;
+  date: string;
+}
+
+export interface GA4LandingPageDataResponse {
+  pages: GA4LandingPageMetric[];
+  totalPages: number;
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+}
+
+
 export interface QueryOverlap {
   queryId: string;
   queryText: string;
@@ -115,6 +158,7 @@ export interface Client {
   name: string;
   googleAdsCustomerId?: string;
   searchConsoleSiteUrl?: string;
+  ga4PropertyId?: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -195,6 +239,45 @@ export function useGoogleAdsData(clientId: string, days: number = 30) {
 }
 
 /**
+ * Fetch GA4 metrics data for a client
+ */
+export function useGA4Data(clientId: string, days: number = 30) {
+  const apiClient = useApiClient();
+
+  return useQuery<GA4DataResponse>({
+    queryKey: ['client', clientId, 'ga4-data', days],
+    queryFn: async () => {
+      const { data } = await apiClient.get<GA4DataResponse>(
+        `/api/clients/${clientId}/ga4-data`,
+        { params: { days } }
+      );
+      return data;
+    },
+    enabled: !!clientId,
+  });
+}
+
+/**
+ * Fetch GA4 landing page metrics data for a client
+ */
+export function useGA4LandingPageData(clientId: string, days: number = 30) {
+  const apiClient = useApiClient();
+
+  return useQuery<GA4LandingPageDataResponse>({
+    queryKey: ['client', clientId, 'ga4-landing-pages', days],
+    queryFn: async () => {
+      const { data } = await apiClient.get<GA4LandingPageDataResponse>(
+        `/api/clients/${clientId}/ga4-landing-pages`,
+        { params: { days } }
+      );
+      return data;
+    },
+    enabled: !!clientId,
+  });
+}
+
+
+/**
  * Fetch query overlaps for a client
  */
 export function useQueryOverlaps(clientId: string, days: number = 30) {
@@ -249,7 +332,7 @@ export function useRunAnalysis(clientId: string) {
   return useMutation<AnalysisResult, Error, AnalysisConfig>({
     mutationFn: async (config: AnalysisConfig) => {
       const { data } = await apiClient.post<AnalysisResult>(
-        `/api/clients/${clientId}/analyze`,
+        `/api/analysis/run/${clientId}`,
         config
       );
       return data;
@@ -314,6 +397,8 @@ export function useClientDetail(clientId: string, days: number = 30) {
   const client = useClient(clientId);
   const scData = useSearchConsoleData(clientId, days);
   const adsData = useGoogleAdsData(clientId, days);
+  const ga4Data = useGA4Data(clientId, days);
+  const ga4LandingPages = useGA4LandingPageData(clientId, days);
   const overlaps = useQueryOverlaps(clientId, days);
   const recommendations = useRecommendations(clientId);
 
@@ -321,6 +406,8 @@ export function useClientDetail(clientId: string, days: number = 30) {
     client.isLoading ||
     scData.isLoading ||
     adsData.isLoading ||
+    ga4Data.isLoading ||
+    ga4LandingPages.isLoading ||
     overlaps.isLoading ||
     recommendations.isLoading;
 
@@ -328,6 +415,8 @@ export function useClientDetail(clientId: string, days: number = 30) {
     client.isError ||
     scData.isError ||
     adsData.isError ||
+    ga4Data.isError ||
+    ga4LandingPages.isError ||
     overlaps.isError ||
     recommendations.isError;
 
@@ -335,6 +424,8 @@ export function useClientDetail(clientId: string, days: number = 30) {
     client: client.data,
     searchConsoleData: scData.data,
     googleAdsData: adsData.data,
+    ga4Data: ga4Data.data,
+    ga4LandingPageData: ga4LandingPages.data,
     queryOverlaps: overlaps.data,
     recommendations: recommendations.data,
     isLoading,
@@ -343,8 +434,11 @@ export function useClientDetail(clientId: string, days: number = 30) {
       client: client.refetch,
       searchConsoleData: scData.refetch,
       googleAdsData: adsData.refetch,
+      ga4Data: ga4Data.refetch,
+      ga4LandingPages: ga4LandingPages.refetch,
       queryOverlaps: overlaps.refetch,
       recommendations: recommendations.refetch,
     },
   };
 }
+

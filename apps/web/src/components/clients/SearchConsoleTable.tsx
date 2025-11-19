@@ -1,10 +1,15 @@
-import { useState } from 'react';
-import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import React, { useState } from 'react';
+import { ArrowUpDown, ArrowUp, ArrowDown, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { SearchConsoleAnalysisModal } from './SearchConsoleAnalysisModal';
+import { useToast } from '@/components/ui/use-toast';
+import { useApiClient } from '@/lib/api';
 import type { SearchConsoleQuery } from '@/hooks/useClientDetail';
 
 interface SearchConsoleTableProps {
   queries: SearchConsoleQuery[];
+  clientId: string;
 }
 
 type SortField = 'query' | 'impressions' | 'clicks' | 'ctr' | 'position' | 'date' | 'page' | 'device' | 'searchType';
@@ -34,10 +39,53 @@ const getPositionColorClass = (position: number): string => {
   return 'text-slate-600';
 };
 
-export function SearchConsoleTable({ queries }: SearchConsoleTableProps) {
+export function SearchConsoleTable({ queries, clientId }: SearchConsoleTableProps) {
+  const { toast } = useToast();
+  const apiClient = useApiClient();
   const [sortField, setSortField] = useState<SortField>('impressions');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [expandedQueryId, setExpandedQueryId] = useState<string | null>(null);
+  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState(null);
+
+  const handleAnalyze = async () => {
+    console.log('handleAnalyze clicked', { clientId, analysisResult });
+    if (!clientId) {
+      console.error('No clientId found');
+      return;
+    }
+
+    setIsAnalysisModalOpen(true);
+    console.log('Modal state set to true');
+
+    if (analysisResult) {
+      console.log('Analysis result already exists, skipping fetch');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    console.log('Starting analysis fetch...');
+    try {
+      const { data } = await apiClient.post(`/api/clients/${clientId}/search-console/analyze`);
+      console.log('Analysis fetch success', data);
+      setAnalysisResult(data);
+    } catch (error) {
+      console.error('Analysis error:', error);
+      toast({
+        title: "Analysis Failed",
+        description: "Could not analyze Search Console data. Please try again.",
+        variant: "destructive"
+      });
+      // Keep modal open to show error state or let user close it?
+      // The current logic closes it, which might look like "nothing happened" if it's fast.
+      // Let's comment out closing it for now to see if the modal actually tries to render.
+      // setIsAnalysisModalOpen(false);
+    } finally {
+      setIsAnalyzing(false);
+      console.log('Analysis fetch finished');
+    }
+  };
 
   if (queries.length === 0) {
     return (
@@ -100,147 +148,163 @@ export function SearchConsoleTable({ queries }: SearchConsoleTableProps) {
   };
 
   return (
-    <div className="rounded-md border">
-      <table className="w-full text-sm">
-        <thead className="bg-slate-50">
-          <tr>
-            <th className="border-b border-slate-200 text-left py-3 px-4 font-medium text-slate-700">
-              <button
-                onClick={() => handleSort('query')}
-                className="flex items-center gap-2 hover:text-blue-600 transition-colors"
-              >
-                Query Text
-                <SortIcon field="query" />
-              </button>
-            </th>
-            <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
-              <button
-                onClick={() => handleSort('impressions')}
-                className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
-              >
-                Impressions
-                <SortIcon field="impressions" />
-              </button>
-            </th>
-            <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
-              <button
-                onClick={() => handleSort('clicks')}
-                className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
-              >
-                Clicks
-                <SortIcon field="clicks" />
-              </button>
-            </th>
-            <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
-              <button
-                onClick={() => handleSort('ctr')}
-                className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
-              >
-                CTR
-                <SortIcon field="ctr" />
-              </button>
-            </th>
-            <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
-              <button
-                onClick={() => handleSort('position')}
-                className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
-              >
-                Avg Position
-                <SortIcon field="position" />
-              </button>
-            </th>
-            <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
-              <button
-                onClick={() => handleSort('date')}
-                className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
-              >
-                Latest Date
-                <SortIcon field="date" />
-              </button>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="bg-white">
-          {sortedQueries.map((query) => {
-            const isExpanded = expandedQueryId === query.id;
-            const hasAdditionalData = query.page || query.device || query.country || query.searchAppearance || query.searchType;
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <Button
+          onClick={handleAnalyze}
+          className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-sm"
+        >
+          <Sparkles className="w-4 h-4 mr-2" />
+          Analyze with AI
+        </Button>
+      </div>
 
-            return (
-              <>
-                <tr
-                  key={query.id}
-                  className={`hover:bg-slate-50 transition-colors border-b border-slate-100 ${hasAdditionalData ? 'cursor-pointer' : ''}`}
-                  onClick={() => hasAdditionalData && setExpandedQueryId(isExpanded ? null : query.id)}
+      <SearchConsoleAnalysisModal
+        isOpen={isAnalysisModalOpen}
+        onClose={() => setIsAnalysisModalOpen(false)}
+        analysis={analysisResult}
+        isLoading={isAnalyzing}
+      />
+
+      <div className="rounded-md border">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr>
+              <th className="border-b border-slate-200 text-left py-3 px-4 font-medium text-slate-700">
+                <button
+                  onClick={() => handleSort('query')}
+                  className="flex items-center gap-2 hover:text-blue-600 transition-colors"
                 >
-                  <td className="py-3 px-4 text-slate-900 font-medium">
-                    <div className="flex items-center gap-2">
-                      {query.query}
-                      {hasAdditionalData && (
+                  Query Text
+                  <SortIcon field="query" />
+                </button>
+              </th>
+              <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
+                <button
+                  onClick={() => handleSort('impressions')}
+                  className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
+                >
+                  Impressions
+                  <SortIcon field="impressions" />
+                </button>
+              </th>
+              <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
+                <button
+                  onClick={() => handleSort('clicks')}
+                  className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
+                >
+                  Clicks
+                  <SortIcon field="clicks" />
+                </button>
+              </th>
+              <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
+                <button
+                  onClick={() => handleSort('ctr')}
+                  className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
+                >
+                  CTR
+                  <SortIcon field="ctr" />
+                </button>
+              </th>
+              <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
+                <button
+                  onClick={() => handleSort('position')}
+                  className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
+                >
+                  Avg Position
+                  <SortIcon field="position" />
+                </button>
+              </th>
+              <th className="border-b border-slate-200 text-right py-3 px-4 font-medium text-slate-700">
+                <button
+                  onClick={() => handleSort('date')}
+                  className="flex items-center justify-end gap-2 hover:text-blue-600 transition-colors w-full"
+                >
+                  Latest Date
+                  <SortIcon field="date" />
+                </button>
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white">
+            {sortedQueries.map((query) => {
+              const isExpanded = expandedQueryId === query.id;
+
+              return (
+                <React.Fragment key={query.id}>
+                  <tr
+                    className="hover:bg-slate-50 transition-colors border-b border-slate-100 cursor-pointer"
+                    onClick={() => setExpandedQueryId(isExpanded ? null : query.id)}
+                  >
+                    <td className="py-3 px-4 text-slate-900 font-medium">
+                      <div className="flex items-center gap-2">
+                        {query.query}
                         <Badge variant="secondary" className="text-xs">
                           {isExpanded ? '−' : '+'}
                         </Badge>
-                      )}
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-slate-600 text-right">{formatNumber(query.impressions)}</td>
-                  <td className="py-3 px-4 text-slate-600 text-right">{formatNumber(query.clicks)}</td>
-                  <td className="py-3 px-4 text-slate-600 text-right">{formatPercentage(query.ctr)}</td>
-                  <td className={`py-3 px-4 text-right ${getPositionColorClass(query.position)}`}>
-                    {formatPosition(query.position)}
-                  </td>
-                  <td className="py-3 px-4 text-slate-600 text-right">{formatDate(query.date)}</td>
-                </tr>
-                {isExpanded && (
-                  <tr className="bg-slate-50 border-b border-slate-100">
-                    <td colSpan={6} className="py-4 px-4">
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-                        {query.page && (
-                          <div>
-                            <div className="text-slate-500 font-medium mb-1">Landing Page</div>
-                            <div className="text-slate-900 break-all">{query.page}</div>
-                          </div>
-                        )}
-                        {query.device && (
-                          <div>
-                            <div className="text-slate-500 font-medium mb-1">Device</div>
-                            <div className="text-slate-900">
-                              <Badge variant="outline">{query.device}</Badge>
-                            </div>
-                          </div>
-                        )}
-                        {query.country && (
-                          <div>
-                            <div className="text-slate-500 font-medium mb-1">Country</div>
-                            <div className="text-slate-900">
-                              <Badge variant="outline">{query.country}</Badge>
-                            </div>
-                          </div>
-                        )}
-                        {query.searchType && (
-                          <div>
-                            <div className="text-slate-500 font-medium mb-1">Search Type</div>
-                            <div className="text-slate-900">
-                              <Badge variant="outline">{query.searchType}</Badge>
-                            </div>
-                          </div>
-                        )}
-                        {query.searchAppearance && (
-                          <div>
-                            <div className="text-slate-500 font-medium mb-1">Search Appearance</div>
-                            <div className="text-slate-900">
-                              <Badge variant="outline">{query.searchAppearance}</Badge>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     </td>
+                    <td className="py-3 px-4 text-slate-600 text-right">{formatNumber(query.impressions)}</td>
+                    <td className="py-3 px-4 text-slate-600 text-right">{formatNumber(query.clicks)}</td>
+                    <td className="py-3 px-4 text-slate-600 text-right">{formatPercentage(query.ctr)}</td>
+                    <td className={`py-3 px-4 text-right ${getPositionColorClass(query.position)}`}>
+                      {formatPosition(query.position)}
+                    </td>
+                    <td className="py-3 px-4 text-slate-600 text-right">{formatDate(query.date)}</td>
                   </tr>
-                )}
-              </>
-            );
-          })}
-        </tbody>
-      </table>
+                  {isExpanded && (
+                    <tr className="bg-slate-50 border-b border-slate-100">
+                      <td colSpan={6} className="py-4 px-4">
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                          {query.page && (
+                            <div>
+                              <div className="text-slate-500 font-medium mb-1">Landing Page</div>
+                              <div className="text-slate-900 break-all">{query.page}</div>
+                            </div>
+                          )}
+                          {query.device && (
+                            <div>
+                              <div className="text-slate-500 font-medium mb-1">Device</div>
+                              <div className="text-slate-900">
+                                <Badge variant="outline">{query.device}</Badge>
+                              </div>
+                            </div>
+                          )}
+                          {query.country && (
+                            <div>
+                              <div className="text-slate-500 font-medium mb-1">Country</div>
+                              <div className="text-slate-900">
+                                <Badge variant="outline">{query.country}</Badge>
+                              </div>
+                            </div>
+                          )}
+                          {query.searchType && (
+                            <div>
+                              <div className="text-slate-500 font-medium mb-1">Search Type</div>
+                              <div className="text-slate-900">
+                                <Badge variant="outline">{query.searchType}</Badge>
+                              </div>
+                            </div>
+                          )}
+                          {query.searchAppearance && (
+                            <div>
+                              <div className="text-slate-500 font-medium mb-1">Search Appearance</div>
+                              <div className="text-slate-900">
+                                <Badge variant="outline">{query.searchAppearance}</Badge>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
+

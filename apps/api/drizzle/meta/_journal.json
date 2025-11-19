@@ -22,6 +22,34 @@
       "when": 1763253247114,
       "tag": "0002_curly_meltdown",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1763498100636,
+      "tag": "0003_opposite_impossible_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1763500924105,
+      "tag": "0004_wide_blockbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1763507144415,
+      "tag": "0005_useful_miss_america",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1763510767588,
+      "tag": "0006_watery_king_bedlam",
+      "breakpoints": true
     }
   ]
 }

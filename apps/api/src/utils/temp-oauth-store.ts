@@ -5,7 +5,7 @@ export interface TempOAuthSession {
   refreshToken: string;
   accessToken?: string;
   clientId: string;
-  service: 'ads' | 'search_console';
+  service: 'ads' | 'search_console' | 'ga4';
   expiresAt: number;
 }
 

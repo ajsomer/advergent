@@ -15,10 +15,6 @@ export const config = {
   // Database
   databaseUrl: process.env.DATABASE_URL,
 
-  // Redis
-  redisUrl: process.env.UPSTASH_REDIS_URL,
-  redisToken: process.env.UPSTASH_REDIS_TOKEN,
-
   // Google OAuth
   googleClientId: process.env.GOOGLE_CLIENT_ID,
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
@@ -43,7 +39,6 @@ export const config = {
 
   // Feature flags
   useMockGoogleApis: process.env.USE_MOCK_GOOGLE_APIS === 'true',
-  runScheduler: process.env.RUN_SCHEDULER === 'true',
 
   // Environment
   nodeEnv: process.env.NODE_ENV || 'development',

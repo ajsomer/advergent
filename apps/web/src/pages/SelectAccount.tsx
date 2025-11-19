@@ -19,8 +19,15 @@ interface SearchConsoleProperty {
   permissionLevel: string;
 }
 
+interface GA4Property {
+  propertyId: string;
+  displayName: string;
+  industryCategory?: string;
+  timeZone?: string;
+}
+
 // Type union for future type narrowing features
-// type AccountOrProperty = GoogleAdsAccount | SearchConsoleProperty;
+// type AccountOrProperty = GoogleAdsAccount | SearchConsoleProperty | GA4Property;
 
 export default function SelectAccount() {
   const navigate = useNavigate();
@@ -29,10 +36,11 @@ export default function SelectAccount() {
 
   const session = searchParams.get('session');
   const clientId = searchParams.get('clientId');
-  const service = searchParams.get('service') as 'ads' | 'search_console' | null;
+  const service = searchParams.get('service') as 'ads' | 'search_console' | 'ga4' | null;
 
   const [accounts, setAccounts] = useState<GoogleAdsAccount[]>([]);
   const [properties, setProperties] = useState<SearchConsoleProperty[]>([]);
+  const [ga4Properties, setGa4Properties] = useState<GA4Property[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
@@ -76,12 +84,23 @@ export default function SelectAccount() {
           if (response.data.properties?.length === 1) {
             setSelectedAccountId(response.data.properties[0].siteUrl);
           }
+        } else if (service === 'ga4') {
+          const response = await api.get(`/api/google/ga4-properties/${clientId}`, {
+            params: { session },
+          });
+
+          setGa4Properties(response.data.properties || []);
+
+          // If only one property, auto-select it
+          if (response.data.properties?.length === 1) {
+            setSelectedAccountId(response.data.properties[0].propertyId);
+          }
         }
       } catch (err: any) {
         const errorMessage =
           err.response?.data?.message ||
           err.response?.data?.error ||
-          `Failed to fetch ${service === 'ads' ? 'Google Ads accounts' : 'Search Console properties'}`;
+          `Failed to fetch ${service === 'ads' ? 'Google Ads accounts' : service === 'search_console' ? 'Search Console properties' : 'GA4 properties'}`;
         setError(errorMessage);
       } finally {
         setLoading(false);
@@ -148,7 +167,8 @@ export default function SelectAccount() {
   };
 
   const isSearchConsole = service === 'search_console';
-  const itemCount = isSearchConsole ? properties.length : accounts.length;
+  const isGA4 = service === 'ga4';
+  const itemCount = isSearchConsole ? properties.length : isGA4 ? ga4Properties.length : accounts.length;
 
   if (loading) {
     return (
@@ -158,7 +178,7 @@ export default function SelectAccount() {
             <CardContent className="flex flex-col items-center justify-center py-16">
               <Loader2 className="h-12 w-12 animate-spin text-blue-600 mb-4" />
               <p className="text-lg font-medium text-slate-700">
-                Loading {isSearchConsole ? 'Search Console properties' : 'Google Ads accounts'}...
+                Loading {isSearchConsole ? 'Search Console properties' : isGA4 ? 'GA4 properties' : 'Google Ads accounts'}...
               </p>
               <p className="text-sm text-slate-500 mt-2">This may take a moment</p>
             </CardContent>
@@ -178,7 +198,7 @@ export default function SelectAccount() {
                 <AlertCircle className="h-12 w-12 text-red-600" />
               </div>
               <CardTitle className="text-center">
-                Unable to Load {isSearchConsole ? 'Properties' : 'Accounts'}
+                Unable to Load {isSearchConsole ? 'Properties' : isGA4 ? 'GA4 Properties' : 'Accounts'}
               </CardTitle>
               <CardDescription className="text-center">{error}</CardDescription>
             </CardHeader>
@@ -206,11 +226,11 @@ export default function SelectAccount() {
                 <AlertCircle className="h-12 w-12 text-amber-600" />
               </div>
               <CardTitle className="text-center">
-                No {isSearchConsole ? 'Search Console Properties' : 'Google Ads Accounts'} Found
+                No {isSearchConsole ? 'Search Console Properties' : isGA4 ? 'GA4 Properties' : 'Google Ads Accounts'} Found
               </CardTitle>
               <CardDescription className="text-center">
                 Make sure you have access to at least one{' '}
-                {isSearchConsole ? 'Search Console property' : 'Google Ads account'} and try again.
+                {isSearchConsole ? 'Search Console property' : isGA4 ? 'GA4 property' : 'Google Ads account'} and try again.
               </CardDescription>
             </CardHeader>
             <CardContent className="flex justify-center space-x-3">
@@ -233,10 +253,10 @@ export default function SelectAccount() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-slate-900 mb-2">
-            Select {isSearchConsole ? 'Search Console Property' : 'Google Ads Account'}
+            Select {isSearchConsole ? 'Search Console Property' : isGA4 ? 'GA4 Property' : 'Google Ads Account'}
           </h1>
           <p className="text-slate-600">
-            Choose which {isSearchConsole ? 'Search Console property' : 'Google Ads account'} to connect for this client
+            Choose which {isSearchConsole ? 'Search Console property' : isGA4 ? 'GA4 property' : 'Google Ads account'} to connect for this client
           </p>
         </div>
 
@@ -251,24 +271,23 @@ export default function SelectAccount() {
         {/* Account/Property Selection */}
         <Card>
           <CardHeader>
-            <CardTitle>Available {isSearchConsole ? 'Properties' : 'Accounts'}</CardTitle>
+            <CardTitle>Available {isSearchConsole ? 'Properties' : isGA4 ? 'GA4 Properties' : 'Accounts'}</CardTitle>
             <CardDescription>
-              {itemCount} {isSearchConsole ? 'property' : 'account'}
-              {itemCount !== 1 ? (isSearchConsole ? 'ies' : 's') : ''} found
+              {itemCount} {isSearchConsole ? 'property' : isGA4 ? 'property' : 'account'}
+              {itemCount !== 1 ? (isSearchConsole || isGA4 ? 'ies' : 's') : ''} found
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
               {/* Google Ads Accounts */}
-              {!isSearchConsole && accounts.map((account) => (
+              {!isSearchConsole && !isGA4 && accounts.map((account) => (
                 <button
                   key={account.customerId}
                   onClick={() => setSelectedAccountId(account.customerId)}
-                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                    selectedAccountId === account.customerId
-                      ? 'border-blue-600 bg-blue-50'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${selectedAccountId === account.customerId
+                    ? 'border-blue-600 bg-blue-50'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
@@ -304,11 +323,10 @@ export default function SelectAccount() {
                   <button
                     key={property.siteUrl}
                     onClick={() => setSelectedAccountId(property.siteUrl)}
-                    className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                      selectedAccountId === property.siteUrl
-                        ? 'border-blue-600 bg-blue-50'
-                        : 'border-slate-200 bg-white hover:border-slate-300'
-                    }`}
+                    className={`w-full text-left p-4 rounded-lg border-2 transition-all ${selectedAccountId === property.siteUrl
+                      ? 'border-blue-600 bg-blue-50'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                      }`}
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
@@ -327,6 +345,41 @@ export default function SelectAccount() {
                   </button>
                 );
               })}
+
+              {/* GA4 Properties */}
+              {isGA4 && ga4Properties.map((property) => (
+                <button
+                  key={property.propertyId}
+                  onClick={() => setSelectedAccountId(property.propertyId)}
+                  className={`w-full text-left p-4 rounded-lg border-2 transition-all ${selectedAccountId === property.propertyId
+                    ? 'border-blue-600 bg-blue-50'
+                    : 'border-slate-200 bg-white hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-2">
+                        <Globe className="h-5 w-5 text-slate-600" />
+                        <h3 className="font-semibold text-slate-900">{property.displayName}</h3>
+                      </div>
+                      <div className="flex items-center space-x-4 mt-2 text-sm text-slate-600">
+                        <div className="flex items-center space-x-1">
+                          <span>ID: {property.propertyId}</span>
+                        </div>
+                        {property.industryCategory && (
+                          <>
+                            <span className="text-slate-400">•</span>
+                            <span>{property.industryCategory}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    {selectedAccountId === property.propertyId && (
+                      <CheckCircle2 className="h-6 w-6 text-blue-600 flex-shrink-0 ml-2" />
+                    )}
+                  </div>
+                </button>
+              ))}
             </div>
 
             <div className="mt-6 pt-6 border-t border-slate-200">
@@ -357,6 +410,12 @@ export default function SelectAccount() {
                 <li>Select the property that matches your client's website</li>
                 <li>Domain properties (sc-domain:) cover all subdomains and protocols</li>
                 <li>URL-prefix properties cover specific URLs only</li>
+                <li>You can change this later by disconnecting and reconnecting</li>
+              </>
+            ) : isGA4 ? (
+              <>
+                <li>Select the GA4 property for your client's website</li>
+                <li>Ensure you have at least 'Viewer' access to the property</li>
                 <li>You can change this later by disconnecting and reconnecting</li>
               </>
             ) : (

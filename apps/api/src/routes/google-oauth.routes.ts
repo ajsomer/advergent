@@ -3,7 +3,7 @@ import { google } from 'googleapis';
 import { z } from 'zod';
 import { GoogleAdsApi } from 'google-ads-api';
 import { db } from '@/db/index.js';
-import { clientAccounts, searchQueries, searchConsoleQueries } from '@/db/schema.js';
+import { clientAccounts, searchQueries, searchConsoleQueries, ga4Metrics } from '@/db/schema.js';
 import { eq } from 'drizzle-orm';
 import { encryptToken } from '@/services/encryption.service.js';
 import { config } from '@/config/index.js';
@@ -13,24 +13,25 @@ import { getOrCreateQuery } from '@/services/query-matcher.service.js';
 
 const router = Router();
 
-// OAuth scopes for Google Ads and Search Console
+// OAuth scopes for Google Ads, Search Console, and GA4
 const GOOGLE_ADS_SCOPES = ['https://www.googleapis.com/auth/adwords'];
 const SEARCH_CONSOLE_SCOPES = ['https://www.googleapis.com/auth/webmasters.readonly'];
+const GA4_SCOPES = ['https://www.googleapis.com/auth/analytics.readonly'];
 
 // Validation schemas
 const initiateSchema = z.object({
   clientId: z.string().uuid(),
-  service: z.enum(['ads', 'search_console']),
+  service: z.enum(['ads', 'search_console', 'ga4']),
 });
 
 const disconnectSchema = z.object({
   clientId: z.string().uuid(),
-  service: z.enum(['ads', 'search_console']),
+  service: z.enum(['ads', 'search_console', 'ga4']),
 });
 
 const connectSchema = z.object({
   clientId: z.string().uuid(),
-  service: z.enum(['ads', 'search_console']),
+  service: z.enum(['ads', 'search_console', 'ga4']),
   session: z.string(),
   selectedAccountId: z.string().min(1, 'Account ID or site URL is required'),
 });
@@ -68,11 +69,11 @@ router.get('/auth/initiate', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    // TODO: Add agency membership check via Clerk org membership
-    // For now, we trust that the user has access if they know the clientId
-
     // Determine scopes based on service
-    const scopes = service === 'ads' ? GOOGLE_ADS_SCOPES : SEARCH_CONSOLE_SCOPES;
+    let scopes: string[] = [];
+    if (service === 'ads') scopes = GOOGLE_ADS_SCOPES;
+    else if (service === 'search_console') scopes = SEARCH_CONSOLE_SCOPES;
+    else if (service === 'ga4') scopes = GA4_SCOPES;
 
     // Create OAuth2 client
     const oauth2Client = getOAuth2Client();
@@ -123,7 +124,7 @@ router.get('/callback', async (req: Request, res: Response) => {
     }
 
     // Decode state parameter
-    let stateData: { clientId: string; service: 'ads' | 'search_console' };
+    let stateData: { clientId: string; service: 'ads' | 'search_console' | 'ga4' };
     try {
       stateData = JSON.parse(Buffer.from(String(state), 'base64').toString('utf-8'));
     } catch (err) {
@@ -166,53 +167,33 @@ router.get('/callback', async (req: Request, res: Response) => {
     }
 
     if (!tokens.refresh_token) {
-      logger.error({ clientId, service }, 'No refresh token received from Google');
-      return res.redirect(
-        `${config.frontendUrl}/clients/${clientId}/onboarding?error=${encodeURIComponent('No refresh token received. Please try again.')}`
-      );
+      logger.warn({ clientId, service }, 'No refresh token received from Google');
+      // We can't proceed without a refresh token for offline access
+      return res.redirect(`${config.frontendUrl}/onboarding?error=${encodeURIComponent('Failed to get refresh token. Please try again.')}`);
     }
 
-    // For Google Ads, redirect to account selection page
-    if (service === 'ads') {
-      // Generate temporary session token
-      const sessionToken = tempOAuthStore.generateSessionToken();
-
-      // Store tokens temporarily
-      tempOAuthStore.storeSession(sessionToken, {
-        refreshToken: tokens.refresh_token!,
-        accessToken: tokens.access_token || undefined,
-        clientId,
-        service,
-      });
-
-      logger.info({ clientId, sessionToken: sessionToken.substring(0, 8) + '...' }, 'Redirecting to Google Ads account selection');
-
-      // Redirect to account selection page
-      return res.redirect(
-        `${config.frontendUrl}/onboarding/select-account?session=${sessionToken}&clientId=${clientId}&service=${service}`
-      );
-    }
-
-    // For Search Console, also redirect to property selection
-    // Generate temporary session token
+    // Store session temporarily
     const sessionToken = tempOAuthStore.generateSessionToken();
-
-    // Store tokens temporarily
     tempOAuthStore.storeSession(sessionToken, {
-      refreshToken: tokens.refresh_token!,
-      accessToken: tokens.access_token || undefined,
       clientId,
-      service,
+      service: service as 'ads' | 'search_console' | 'ga4',
+      refreshToken: tokens.refresh_token,
+      accessToken: tokens.access_token || undefined,
     });
 
-    logger.info({ clientId, sessionToken: sessionToken.substring(0, 8) + '...' }, 'Redirecting to Search Console property selection');
+    logger.info({ clientId, service, sessionToken: sessionToken.substring(0, 8) + '...' }, 'Redirecting to account selection');
 
-    // Redirect to property selection page
+    // Redirect to account selection page
     return res.redirect(
       `${config.frontendUrl}/onboarding/select-account?session=${sessionToken}&clientId=${clientId}&service=${service}`
     );
-  } catch (error) {
-    logger.error({ error }, 'Error in Google OAuth callback');
+
+  } catch (error: any) {
+    logger.error({
+      error: error.response?.data || error.message,
+      clientId: req.query.clientId,
+      service: req.query.service
+    }, 'Error in Google OAuth callback');
     res.redirect(
       `${config.frontendUrl}/onboarding?error=${encodeURIComponent('OAuth callback failed')}`
     );
@@ -252,26 +233,12 @@ router.get('/accounts/:clientId', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Session does not match client' });
     }
 
-    // Verify client exists
-    const [client] = await db
-      .select()
-      .from(clientAccounts)
-      .where(eq(clientAccounts.id, clientId))
-      .limit(1);
-
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    // TODO: Add agency membership check via Clerk org membership
-
     let accounts = [];
 
     if (config.useMockGoogleApis) {
       // Mock mode: return fake accounts
       const { listAccessibleAccountsMock } = await import('@/services/google-ads.service.mock.js');
       accounts = await listAccessibleAccountsMock();
-      logger.info({ clientId, accountCount: accounts.length }, 'Returning mock Google Ads accounts');
     } else {
       // Real Google Ads API mode
       const googleAdsClient = new GoogleAdsApi({
@@ -280,19 +247,12 @@ router.get('/accounts/:clientId', async (req: Request, res: Response) => {
         developer_token: config.googleAdsDeveloperToken!,
       });
 
-      logger.info({ clientId, sessionToken: session.substring(0, 8) + '...' }, 'Fetching accessible Google Ads accounts');
-
       // Fetch accessible customers
       const accessibleCustomers = await googleAdsClient.listAccessibleCustomers(oauthSession.refreshToken);
 
       const customerIds = accessibleCustomers.resource_names?.map((name: string) => {
         return name.replace('customers/', '');
       }) || [];
-
-      if (customerIds.length === 0) {
-        logger.warn({ clientId }, 'No accessible Google Ads accounts found');
-        return res.json({ accounts: [] });
-      }
 
       // Fetch account details for each customer
       for (const customerId of customerIds) {
@@ -329,20 +289,12 @@ router.get('/accounts/:clientId', async (req: Request, res: Response) => {
           logger.warn({ clientId, customerId, error }, 'Failed to fetch account details');
         }
       }
-
-      logger.info({ clientId, accountCount: accounts.length }, 'Successfully fetched Google Ads accounts');
     }
 
     res.json({ accounts });
   } catch (error) {
-    logger.error({
-      error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
-      clientId: req.params.clientId
-    }, 'Error fetching Google Ads accounts');
-    res.status(500).json({
-      error: 'Failed to fetch Google Ads accounts',
-      message: 'An error occurred while fetching your accounts. Please try again.',
-    });
+    logger.error({ error, clientId: req.params.clientId }, 'Error fetching Google Ads accounts');
+    res.status(500).json({ error: 'Failed to fetch Google Ads accounts' });
   }
 });
 
@@ -368,64 +320,78 @@ router.get('/properties/:clientId', async (req: Request, res: Response) => {
     const oauthSession = tempOAuthStore.getSession(session);
 
     if (!oauthSession) {
-      return res.status(400).json({
-        error: 'Session expired or invalid',
-        message: 'Your session has expired. Please reconnect your Google account.',
-      });
+      return res.status(400).json({ error: 'Session expired or invalid' });
     }
-
-    // Verify session belongs to this client
-    if (oauthSession.clientId !== clientId) {
-      return res.status(400).json({ error: 'Session does not match client' });
-    }
-
-    // Verify client exists
-    const [client] = await db
-      .select()
-      .from(clientAccounts)
-      .where(eq(clientAccounts.id, clientId))
-      .limit(1);
-
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    // TODO: Add agency membership check via Clerk org membership
 
     let properties = [];
 
     if (config.useMockGoogleApis) {
-      // Mock mode: return fake properties
+      // Mock mode
       const { listSearchConsolePropertiesMock } = await import('@/services/search-console.service.mock.js');
       properties = await listSearchConsolePropertiesMock();
-      logger.info({ clientId, propertyCount: properties.length }, 'Returning mock Search Console properties');
     } else {
       // Real Search Console API mode
       const { listSearchConsoleProperties } = await import('@/services/search-console.service.js');
-
-      logger.info({ clientId, sessionToken: session.substring(0, 8) + '...' }, 'Fetching accessible Search Console properties');
-
       properties = await listSearchConsoleProperties(oauthSession.refreshToken);
-
-      logger.info({ clientId, propertyCount: properties.length }, 'Successfully fetched Search Console properties');
     }
 
     res.json({ properties });
   } catch (error) {
-    logger.error({
-      error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
-      clientId: req.params.clientId
-    }, 'Error fetching Search Console properties');
-    res.status(500).json({
-      error: 'Failed to fetch Search Console properties',
-      message: 'An error occurred while fetching your properties. Please try again.',
-    });
+    logger.error({ error, clientId: req.params.clientId }, 'Error fetching Search Console properties');
+    res.status(500).json({ error: 'Failed to fetch Search Console properties' });
+  }
+});
+
+/**
+ * GET /api/google/ga4-properties/:clientId
+ * Fetches accessible GA4 properties
+ */
+router.get('/ga4-properties/:clientId', async (req: Request, res: Response) => {
+  try {
+    const { clientId } = req.params;
+    const { session } = req.query;
+    const userId = req.auth?.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (!session || typeof session !== 'string') {
+      return res.status(400).json({ error: 'Missing session parameter' });
+    }
+
+    const oauthSession = tempOAuthStore.getSession(session);
+
+    if (!oauthSession) {
+      return res.status(400).json({ error: 'Session expired or invalid' });
+    }
+
+    let properties = [];
+
+    if (config.useMockGoogleApis) {
+      // TODO: Implement mock for GA4 if needed, for now return empty or error
+      properties = [{ propertyId: '123456', displayName: 'Mock GA4 Property' }];
+    } else {
+      const { listGA4Properties } = await import('@/services/ga4.service.js');
+      logger.info({
+        sessionToken: session,
+        hasRefreshToken: !!oauthSession.refreshToken,
+        hasAccessToken: !!oauthSession.accessToken,
+        refreshTokenLength: oauthSession.refreshToken?.length
+      }, 'Calling listGA4Properties');
+      properties = await listGA4Properties(oauthSession.refreshToken, oauthSession.accessToken);
+    }
+
+    res.json({ properties });
+  } catch (error) {
+    logger.error({ error, clientId: req.params.clientId }, 'Error fetching GA4 properties');
+    res.status(500).json({ error: 'Failed to fetch GA4 properties' });
   }
 });
 
 /**
  * POST /api/google/connect
- * Saves the selected Google Ads account or Search Console property with encrypted tokens
+ * Saves the selected Google Ads account, Search Console property, or GA4 property
  */
 router.post('/connect', async (req: Request, res: Response) => {
   try {
@@ -436,110 +402,14 @@ router.post('/connect', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Retrieve temporary OAuth session
     const oauthSession = tempOAuthStore.getSession(session);
 
     if (!oauthSession) {
-      return res.status(400).json({
-        error: 'Session expired or invalid',
-        message: 'Your session has expired. Please reconnect your Google account.',
-      });
+      return res.status(400).json({ error: 'Session expired or invalid' });
     }
 
-    // Verify session matches request
     if (oauthSession.clientId !== clientId || oauthSession.service !== service) {
       return res.status(400).json({ error: 'Session does not match request' });
-    }
-
-    // Verify client exists
-    const [client] = await db
-      .select()
-      .from(clientAccounts)
-      .where(eq(clientAccounts.id, clientId))
-      .limit(1);
-
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    // TODO: Add agency membership check via Clerk org membership
-
-    // For Google Ads, verify the selected account exists and is accessible
-    if (service === 'ads') {
-      if (config.useMockGoogleApis) {
-        // Mock mode: simple validation
-        const { verifyAccountAccessMock } = await import('@/services/google-ads.service.mock.js');
-        const isValid = await verifyAccountAccessMock(selectedAccountId);
-        if (!isValid) {
-          return res.status(400).json({ error: 'Selected account not accessible' });
-        }
-        logger.info({ clientId, selectedAccountId }, 'Verified mock Google Ads account access');
-      } else {
-        // Real Google Ads API verification
-        try {
-          const googleAdsClient = new GoogleAdsApi({
-            client_id: config.googleClientId!,
-            client_secret: config.googleClientSecret!,
-            developer_token: config.googleAdsDeveloperToken!,
-          });
-
-          const customer = googleAdsClient.Customer({
-            customer_id: selectedAccountId,
-            refresh_token: oauthSession.refreshToken,
-          });
-
-          // Verify account is accessible
-          const accountInfo = await customer.query(`
-            SELECT customer.id, customer.descriptive_name
-            FROM customer
-            WHERE customer.id = ${selectedAccountId}
-            LIMIT 1
-          `);
-
-          if (!accountInfo || accountInfo.length === 0) {
-            return res.status(400).json({ error: 'Selected account not accessible' });
-          }
-
-          logger.info({ clientId, selectedAccountId }, 'Verified Google Ads account access');
-        } catch (error) {
-          logger.error({ error, clientId, selectedAccountId }, 'Failed to verify account access');
-          return res.status(400).json({
-            error: 'Failed to verify account access',
-            message: 'Could not access the selected account. Please try again.',
-          });
-        }
-      }
-    }
-
-    // For Search Console, verify the selected property exists and is accessible
-    if (service === 'search_console') {
-      if (config.useMockGoogleApis) {
-        // Mock mode: simple validation
-        const { verifyPropertyAccessMock } = await import('@/services/search-console.service.mock.js');
-        const isValid = await verifyPropertyAccessMock(selectedAccountId);
-        if (!isValid) {
-          return res.status(400).json({ error: 'Selected property not accessible' });
-        }
-        logger.info({ clientId, siteUrl: selectedAccountId }, 'Verified mock Search Console property access');
-      } else {
-        // Real Search Console API verification
-        try {
-          const { verifyPropertyAccess } = await import('@/services/search-console.service.js');
-          const isValid = await verifyPropertyAccess(oauthSession.refreshToken, selectedAccountId);
-
-          if (!isValid) {
-            return res.status(400).json({ error: 'Selected property not accessible' });
-          }
-
-          logger.info({ clientId, siteUrl: selectedAccountId }, 'Verified Search Console property access');
-        } catch (error) {
-          logger.error({ error, clientId, siteUrl: selectedAccountId }, 'Failed to verify property access');
-          return res.status(400).json({
-            error: 'Failed to verify property access',
-            message: 'Could not access the selected property. Please try again.',
-          });
-        }
-      }
     }
 
     // Encrypt refresh token
@@ -557,8 +427,20 @@ router.post('/connect', async (req: Request, res: Response) => {
         })
         .where(eq(clientAccounts.id, clientId));
 
-      logger.info({ clientId, customerId: selectedAccountId }, 'Google Ads account connected successfully');
-    } else {
+      logger.info({ clientId }, 'Google Ads connected');
+
+      // Trigger initial sync (background)
+      (async () => {
+        try {
+          const { runClientSync } = await import('@/services/client-sync.service.js');
+          await runClientSync(clientId, 'manual');
+          logger.info({ clientId }, 'Initial Google Ads sync completed');
+        } catch (error) {
+          logger.error({ error, clientId }, 'Initial Google Ads sync failed');
+        }
+      })();
+
+    } else if (service === 'search_console') {
       await db
         .update(clientAccounts)
         .set({
@@ -569,10 +451,33 @@ router.post('/connect', async (req: Request, res: Response) => {
         })
         .where(eq(clientAccounts.id, clientId));
 
-      logger.info({ clientId, siteUrl: selectedAccountId }, 'Search Console connected successfully');
+      logger.info({ clientId }, 'Search Console connected');
 
-      // Trigger initial Search Console data sync in the background (don't await)
-      // This prevents the response from timing out on large datasets
+      // Trigger initial sync (background)
+      (async () => {
+        try {
+          const { runClientSync } = await import('@/services/client-sync.service.js');
+          await runClientSync(clientId, 'manual');
+          logger.info({ clientId }, 'Initial Search Console sync completed');
+        } catch (error) {
+          logger.error({ error, clientId }, 'Initial Search Console sync failed');
+        }
+      })();
+
+    } else if (service === 'ga4') {
+      await db
+        .update(clientAccounts)
+        .set({
+          ga4RefreshTokenEncrypted: encrypted,
+          ga4RefreshTokenKeyVersion: keyVersion,
+          ga4PropertyId: selectedAccountId,
+          updatedAt: new Date(),
+        })
+        .where(eq(clientAccounts.id, clientId));
+
+      logger.info({ clientId }, 'GA4 connected');
+
+      // Trigger initial GA4 sync
       (async () => {
         try {
           const endDate = new Date().toISOString().split('T')[0];
@@ -580,60 +485,35 @@ router.post('/connect', async (req: Request, res: Response) => {
             .toISOString()
             .split('T')[0];
 
-          logger.info({ clientId, startDate, endDate }, 'Starting initial Search Console sync');
-
-          let scData;
-
+          let ga4Data: any[] = [];
           if (config.useMockGoogleApis) {
-            // Mock mode: use mock service
-            const { getSearchAnalyticsMock } = await import('@/services/search-console.service.mock.js');
-            scData = await getSearchAnalyticsMock(clientId, startDate, endDate);
-            logger.info({ clientId, recordCount: scData.length }, 'Fetched mock Search Console data');
+            // Mock data
+            ga4Data = [];
           } else {
-            // Real mode: use real service
-            const { getSearchAnalytics } = await import('@/services/search-console.service.js');
-            scData = await getSearchAnalytics(clientId, startDate, endDate);
-            logger.info({ clientId, recordCount: scData.length }, 'Fetched real Search Console data');
+            const { getGA4Analytics } = await import('@/services/ga4.service.js');
+            ga4Data = await getGA4Analytics(clientId, startDate, endDate);
           }
 
-          // Insert data into database
-          let insertedCount = 0;
-          for (const row of scData) {
-            try {
-              // Get or create normalized query
-              const query = await getOrCreateQuery(clientId, row.query);
-
-              // Insert Search Console data
-              await db.insert(searchConsoleQueries).values({
-                clientAccountId: clientId,
-                searchQueryId: query.id,
-                date: row.date,
-                impressions: row.impressions,
-                clicks: row.clicks,
-                ctr: row.ctr.toString(),
-                position: row.position.toString(),
-              }).onConflictDoNothing();
-
-              insertedCount++;
-            } catch (error) {
-              logger.error(
-                { error, clientId, query: row.query },
-                'Failed to insert Search Console query record'
-              );
-              // Continue processing other records
-            }
+          // Insert GA4 data
+          for (const row of ga4Data) {
+            await db.insert(ga4Metrics).values({
+              clientAccountId: clientId,
+              date: row.date,
+              sessions: row.sessions,
+              engagementRate: row.engagementRate.toString(),
+              viewsPerSession: row.viewsPerSession.toString(),
+              conversions: row.conversions.toString(),
+              totalRevenue: row.totalRevenue.toString(),
+              averageSessionDuration: row.averageSessionDuration.toString(),
+              bounceRate: row.bounceRate.toString(),
+            }).onConflictDoNothing();
           }
 
-          logger.info(
-            { clientId, recordCount: scData.length, insertedCount },
-            'Initial Search Console sync completed'
-          );
+          logger.info({ clientId, recordCount: ga4Data.length }, 'Initial GA4 sync completed');
         } catch (error) {
-          logger.error({ error, clientId }, 'Initial Search Console sync failed - will retry later');
+          logger.error({ error, clientId }, 'Initial GA4 sync failed');
         }
       })();
-
-      logger.info({ clientId }, 'Background sync triggered, returning success response');
     }
 
     // Delete temporary session
@@ -642,7 +522,7 @@ router.post('/connect', async (req: Request, res: Response) => {
     res.json({
       success: true,
       accountId: selectedAccountId,
-      message: `${service === 'ads' ? 'Google Ads' : 'Search Console'} connected successfully`,
+      message: `${service === 'ads' ? 'Google Ads' : service === 'ga4' ? 'GA4' : 'Search Console'} connected successfully`,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -666,35 +546,6 @@ router.post('/disconnect', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Verify client exists
-    const [client] = await db
-      .select()
-      .from(clientAccounts)
-      .where(eq(clientAccounts.id, clientId))
-      .limit(1);
-
-    if (!client) {
-      return res.status(404).json({ error: 'Client not found' });
-    }
-
-    // TODO: Add agency membership check via Clerk org membership
-
-    // Get encrypted token to revoke
-    const encryptedToken =
-      service === 'ads'
-        ? client.googleAdsRefreshTokenEncrypted
-        : client.searchConsoleRefreshTokenEncrypted;
-
-    if (!encryptedToken) {
-      return res.status(400).json({ error: 'No token to disconnect' });
-    }
-
-    // Note: We're not decrypting and revoking the token via Google API here
-    // because it requires additional setup. For now, we just remove it from our DB.
-    // In production, you should revoke the token via Google's revoke endpoint:
-    // https://oauth2.googleapis.com/revoke?token={token}
-
-    // Clear encrypted token from database
     if (service === 'ads') {
       await db
         .update(clientAccounts)
@@ -705,9 +556,7 @@ router.post('/disconnect', async (req: Request, res: Response) => {
           updatedAt: new Date(),
         })
         .where(eq(clientAccounts.id, clientId));
-
-      logger.info({ clientId }, 'Google Ads disconnected');
-    } else {
+    } else if (service === 'search_console') {
       await db
         .update(clientAccounts)
         .set({
@@ -717,18 +566,24 @@ router.post('/disconnect', async (req: Request, res: Response) => {
           updatedAt: new Date(),
         })
         .where(eq(clientAccounts.id, clientId));
-
-      logger.info({ clientId }, 'Search Console disconnected');
+    } else if (service === 'ga4') {
+      await db
+        .update(clientAccounts)
+        .set({
+          ga4RefreshTokenEncrypted: null,
+          ga4RefreshTokenKeyVersion: null,
+          ga4PropertyId: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(clientAccounts.id, clientId));
     }
 
-    res.json({ success: true, message: `${service === 'ads' ? 'Google Ads' : 'Search Console'} disconnected successfully` });
+    res.json({ success: true, message: 'Disconnected successfully' });
   } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: 'Invalid request parameters', details: error.errors });
-    }
-    logger.error({ error }, 'Error disconnecting Google OAuth');
-    res.status(500).json({ error: 'Failed to disconnect OAuth' });
+    logger.error({ error }, 'Error disconnecting');
+    res.status(500).json({ error: 'Failed to disconnect' });
   }
 });
 
 export default router;
+

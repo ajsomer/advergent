@@ -9,14 +9,18 @@ import { Alert } from '@/components/ui/alert';
 import { RecommendationCard } from '@/components/clients/RecommendationCard';
 import { QueryOverlapTable } from '@/components/clients/QueryOverlapTable';
 import { SearchConsoleTable } from '@/components/clients/SearchConsoleTable';
+import { GA4MetricsTable } from '@/components/clients/GA4MetricsTable';
 import { AnalysisRunForm } from '@/components/clients/AnalysisRunForm';
+import { GA4LandingPageTable } from '@/components/clients/GA4LandingPageTable';
+import { FullAnalysisModal } from '@/components/clients/FullAnalysisModal';
 import { ArrowLeft, RefreshCw } from 'lucide-react';
 
-type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'analysis';
+type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'ga4' | 'analysis';
 
 export default function ClientDetail() {
   const { clientId } = useParams<{ clientId: string }>();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
   const [recommendationFilters, setRecommendationFilters] = useState({
     status: undefined as string | undefined,
     recommendationType: undefined as string | undefined,
@@ -27,8 +31,18 @@ export default function ClientDetail() {
     return <div>Client ID not found</div>;
   }
 
-  const { client, searchConsoleData, googleAdsData, queryOverlaps, recommendations, isLoading, isError, refetch } =
-    useClientDetail(clientId);
+  const {
+    client,
+    searchConsoleData,
+    googleAdsData,
+    ga4Data,
+    ga4LandingPageData,
+    queryOverlaps,
+    recommendations,
+    isLoading,
+    isError,
+    refetch,
+  } = useClientDetail(clientId, 30);
 
   const runAnalysis = useRunAnalysis(clientId);
   const updateStatus = useUpdateRecommendationStatus(clientId);
@@ -58,6 +72,7 @@ export default function ClientDetail() {
     { id: 'recommendations' as const, label: 'Recommendations', badge: recommendations?.summary.total },
     { id: 'query-data' as const, label: 'Query Data' },
     { id: 'search-console' as const, label: 'Search Console', badge: searchConsoleData?.totalQueries },
+    { id: 'ga4' as const, label: 'GA4 Analytics', badge: ga4Data?.totalMetrics },
     { id: 'analysis' as const, label: 'Analysis' },
   ];
 
@@ -71,40 +86,47 @@ export default function ClientDetail() {
             Back to Dashboard
           </Link>
         </div>
-        <div className="flex items-start justify-between">
+        <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">{client.name}</h1>
-            <div className="flex gap-2 mt-2">
-              <Badge variant={client.googleAdsCustomerId ? 'success' : 'secondary'}>
-                Google Ads: {client.googleAdsCustomerId ? 'Connected' : 'Not Connected'}
-              </Badge>
-              <Badge variant={client.searchConsoleSiteUrl ? 'success' : 'secondary'}>
-                Search Console: {client.searchConsoleSiteUrl ? 'Connected' : 'Not Connected'}
-              </Badge>
-            </div>
+            <h1 className="text-3xl font-bold">{client?.name || 'Loading...'}</h1>
+            <p className="text-slate-500 mt-1">
+              {client?.googleAdsCustomerId && `Google Ads: ${client.googleAdsCustomerId}`}
+              {client?.searchConsoleSiteUrl && ` • Search Console: ${client.searchConsoleSiteUrl}`}
+            </p>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              syncData.mutate(undefined, {
-                onSuccess: () => {
-                  // After sync job is queued, refetch the data
-                  setTimeout(() => {
-                    refetch.client();
-                    refetch.searchConsoleData();
-                    refetch.googleAdsData();
-                    refetch.queryOverlaps();
-                    refetch.recommendations();
-                  }, 2000); // Wait 2 seconds for job to process
-                },
-              });
-            }}
-            disabled={syncData.isPending}
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${syncData.isPending ? 'animate-spin' : ''}`} />
-            {syncData.isPending ? 'Syncing...' : 'Refresh Data'}
-          </Button>
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                syncData.mutate(undefined, {
+                  onSuccess: () => {
+                    // After sync job is queued, refetch the data
+                    setTimeout(() => {
+                      refetch.client();
+                      refetch.searchConsoleData();
+                      refetch.googleAdsData();
+                      refetch.ga4Data();
+                      refetch.queryOverlaps();
+                      refetch.recommendations();
+                    }, 2000); // Wait 2 seconds for job to process
+                  },
+                });
+              }}
+              disabled={syncData.isPending}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${syncData.isPending ? 'animate-spin' : ''}`} />
+              {syncData.isPending ? 'Syncing...' : 'Refresh Data'}
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={() => setIsAnalysisModalOpen(true)}
+              disabled={runAnalysis.isPending}
+            >
+              {runAnalysis.isPending ? 'Analyzing...' : 'Run AI Analysis'}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -145,11 +167,10 @@ export default function ClientDetail() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
-                activeTab === tab.id
-                  ? 'border-blue-500 text-blue-600'
-                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
-              }`}
+              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === tab.id
+                ? 'border-blue-500 text-blue-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                }`}
             >
               {tab.label}
               {tab.badge !== undefined && (
@@ -275,7 +296,7 @@ export default function ClientDetail() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <SearchConsoleTable queries={searchConsoleData.queries} />
+                  <SearchConsoleTable queries={searchConsoleData.queries} clientId={clientId} />
                   <div className="mt-4 text-sm text-slate-500 text-right">
                     Data from {new Date(searchConsoleData.dateRange.startDate).toLocaleDateString('en-US', {
                       month: 'short',
@@ -304,6 +325,62 @@ export default function ClientDetail() {
           </div>
         )}
 
+        {activeTab === 'ga4' && (
+          <div className="space-y-6">
+            {ga4Data && ga4Data.metrics.length > 0 ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>GA4 Analytics</CardTitle>
+                  <CardDescription>
+                    Website performance metrics from Google Analytics 4 over the last 30 days
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <GA4MetricsTable metrics={ga4Data.metrics} />
+                  <div className="mt-4 text-sm text-slate-500 text-right">
+                    Data from {new Date(ga4Data.dateRange.startDate).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}{' '}
+                    to{' '}
+                    {new Date(ga4Data.dateRange.endDate).toLocaleDateString('en-US', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <p className="text-slate-500 text-lg">No GA4 data available</p>
+                  <p className="text-sm text-slate-400 mt-2">
+                    Connect GA4 in the onboarding flow to see analytics data
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* GA4 Landing Pages */}
+            {ga4LandingPageData && ga4LandingPageData.pages.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Landing Page Performance (Organic)</CardTitle>
+                  <CardDescription>
+                    Organic traffic engagement metrics by landing page from GA4
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <GA4LandingPageTable pages={ga4LandingPageData.pages} />
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* Analysis Tab - Simple AI Analysis button */}
         {activeTab === 'analysis' && (
           <div className="space-y-6">
             <AnalysisRunForm
@@ -317,7 +394,25 @@ export default function ClientDetail() {
             />
           </div>
         )}
+
       </div>
+
+      {/* Full Analysis Modal */}
+      <FullAnalysisModal
+        isOpen={isAnalysisModalOpen}
+        onClose={() => {
+          setIsAnalysisModalOpen(false);
+          refetch.recommendations();
+        }}
+        onRunAnalysis={async () => {
+          return new Promise((resolve, reject) => {
+            runAnalysis.mutate({}, {
+              onSuccess: (data) => resolve(data),
+              onError: (error) => reject(error),
+            });
+          });
+        }}
+      />
     </main>
   );
 }

@@ -21,7 +21,7 @@ async function testDrizzleConnection() {
     dbLogger.info({ count: usersWithAgencies.length }, 'Successfully queried users with relations');
 
     // Test 3: Test schema export
-    dbLogger.info('Schema tables available:', Object.keys(db._.schema || {}));
+    dbLogger.info({ tables: Object.keys(db._.schema || {}) }, 'Schema tables available');
 
     dbLogger.info('✅ All Drizzle tests passed!');
     process.exit(0);

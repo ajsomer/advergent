@@ -9,11 +9,17 @@ import {
 } from '@/db/index.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { logger } from '@/utils/logger.js';
-import { findOverlappingQueries, sortBySpend, filterBySpendThreshold } from '@/services/query-matcher.service.js';
+import {
+  findOverlappingQueries,
+  filterBySpendThreshold,
+  sortBySpend,
+  type GoogleAdsQuery,
+  type SearchConsoleQuery,
+  type QueryOverlap,
+} from '@/services/query-matcher.service.js';
 import { analyzeQueryOverlap, analyzeBatchQueryOverlaps } from '@/services/ai-analyzer.service.js';
 import { saveRecommendation, getRecommendationStats } from '@/services/recommendation-storage.service.js';
 import { getOrCreateQuery } from '@/services/query-matcher.service.js';
-import type { GoogleAdsQuery, SearchConsoleQuery } from '@/services/query-matcher.service.js';
 
 const router = Router();
 const analysisLogger = logger.child({ module: 'analysis-routes' });
@@ -70,6 +76,7 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
         ctr: searchConsoleQueriesTable.ctr,
         impressions: searchConsoleQueriesTable.impressions,
         clicks: searchConsoleQueriesTable.clicks,
+        page: searchConsoleQueriesTable.page,
       })
       .from(searchConsoleQueriesTable)
       .innerJoin(searchQueries, eq(searchConsoleQueriesTable.searchQueryId, searchQueries.id))
@@ -86,18 +93,21 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
       'Fetched query data'
     );
 
-    if (adsData.length === 0) {
+    // Check if we have at least some data to work with
+    if (scData.length === 0 && adsData.length === 0) {
       return res.status(400).json({
-        error: 'No Google Ads data available for analysis',
-        message: 'Please ensure Google Ads sync has completed',
+        error: 'No data available for analysis',
+        message: 'Please ensure at least Search Console or Google Ads sync has completed',
       });
     }
 
+    // Warning if only partial data
+    if (adsData.length === 0) {
+      analysisLogger.warn({ clientId }, 'No Google Ads data - analysis will focus on organic performance only');
+    }
+
     if (scData.length === 0) {
-      return res.status(400).json({
-        error: 'No Search Console data available for analysis',
-        message: 'Please ensure Search Console sync has completed',
-      });
+      analysisLogger.warn({ clientId }, 'No Search Console data - analysis will focus on paid performance only');
     }
 
     // Convert to GoogleAdsQuery and SearchConsoleQuery format
@@ -118,12 +128,19 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
       clicks: row.clicks || 0,
     }));
 
-    // Find overlapping queries
-    let overlaps = findOverlappingQueries(googleAdsQueries, searchConsoleQueries);
+    // Find overlapping queries (or analyze all SC queries if no Ads data)
+    let overlaps: QueryOverlap[] = adsData.length > 0
+      ? findOverlappingQueries(googleAdsQueries, searchConsoleQueries)
+      : searchConsoleQueries.map(scQuery => ({
+        queryText: scQuery.query,
+        queryHash: scQuery.query.toLowerCase().replace(/\s+/g, '-'),
+        googleAds: null as any, // No ads data available
+        searchConsole: scQuery,
+      }));
 
     analysisLogger.info(
-      { clientId, overlapCount: overlaps.length },
-      'Found query overlaps'
+      { clientId, overlapCount: overlaps.length, hasAdsData: adsData.length > 0 },
+      adsData.length > 0 ? 'Found query overlaps' : 'Analyzing organic queries only'
     );
 
     if (overlaps.length === 0) {
@@ -134,7 +151,9 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
         recommendationsCreated: 0,
         estimatedTotalSavings: 0,
         processingTime: Date.now() - startTime,
-        message: 'No overlapping queries found between Google Ads and Search Console',
+        message: adsData.length === 0
+          ? 'No Search Console queries to analyze'
+          : 'No overlapping queries found between Google Ads and Search Console',
       });
     }
 
@@ -154,11 +173,70 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
       'Filtered and sorted overlaps'
     );
 
+    // Fetch GA4 landing page metrics for correlation
+    const { ga4LandingPageMetrics } = await import('@/db/schema.js');
+    const ga4PageData = await db
+      .select()
+      .from(ga4LandingPageMetrics)
+      .where(eq(ga4LandingPageMetrics.clientAccountId, clientId))
+      .orderBy(desc(ga4LandingPageMetrics.date))
+      .limit(1000);
+
+    analysisLogger.info(
+      { clientId, ga4PageCount: ga4PageData.length },
+      'Fetched GA4 landing page metrics for correlation'
+    );
+
+    // Build page -> metrics mapping for quick lookup
+    const pageMetricsMap = new Map<string, typeof ga4PageData>();
+    for (const metric of ga4PageData) {
+      const key = metric.landingPage;
+      if (!pageMetricsMap.has(key)) {
+        pageMetricsMap.set(key, []);
+      }
+      pageMetricsMap.get(key)!.push(metric);
+    }
+
+    // Enrich overlaps with landing page data from Search Console
+    const enrichedOverlaps = overlaps.map(overlap => {
+      // Find Search Console entries for this query that have page data
+      const scEntries = scData.filter(row => row.query === overlap.queryText && row.page);
+
+      // For each unique page, find corresponding GA4 metrics
+      const landingPageInsights = scEntries
+        .map(scRow => {
+          const ga4Metrics = pageMetricsMap.get(scRow.page || '') || [];
+          return {
+            page: scRow.page || '',
+            scMetrics: {
+              position: parseFloat(scRow.position?.toString() || '0'),
+              ctr: parseFloat(scRow.ctr?.toString() || '0'),
+              impressions: scRow.impressions || 0,
+              clicks: scRow.clicks || 0,
+            },
+            ga4Metrics: ga4Metrics.map(m => ({
+              sessions: m.sessions || 0,
+              engagementRate: parseFloat(m.engagementRate?.toString() || '0'),
+              bounceRate: parseFloat(m.bounceRate?.toString() || '0'),
+              conversions: parseFloat(m.conversions?.toString() || '0'),
+              revenue: parseFloat(m.totalRevenue?.toString() || '0'),
+              avgSessionDuration: parseFloat(m.averageSessionDuration?.toString() || '0'),
+            })),
+          };
+        })
+        .filter(insight => insight.page && insight.ga4Metrics.length > 0);
+
+      return {
+        ...overlap,
+        landingPageInsights,
+      };
+    });
+
     // Analyze overlaps using AI (batch processing with rate limiting)
     const batchSize = parseInt(req.body.batchSize || '5');
     const delayMs = parseInt(req.body.delayMs || '1000');
 
-    const analysisResults = await analyzeBatchQueryOverlaps(overlaps, undefined, {
+    const analysisResults = await analyzeBatchQueryOverlaps(enrichedOverlaps, undefined, {
       batchSize,
       delayMs,
     });
@@ -167,7 +245,7 @@ router.post('/run/:clientId', async (req: Request, res: Response) => {
     let recommendationsCreated = 0;
     let totalSavings = 0;
 
-    for (const overlap of overlaps) {
+    for (const overlap of enrichedOverlaps) {
       const result = analysisResults.get(overlap.queryHash);
 
       if (result && !(result instanceof Error)) {

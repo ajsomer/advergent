@@ -115,11 +115,14 @@ npm run migrate:down     # Rollback last migration
    - `encryption.service.ts` - AES-256-GCM via AWS KMS for OAuth tokens
    - `password.service.ts` - bcrypt hashing (12 rounds)
 
-6. **Background Jobs** - BullMQ + Upstash Redis:
-   - `workers/scheduler.ts` - Cron scheduler with leader election (prevents duplicate jobs)
-   - `workers/sync.worker.ts` - Daily data sync jobs
-   - `workers/index.ts` - Worker process entry point
-   - Leader election uses Redis `SETNX` with TTL to ensure only one scheduler runs
+6. **Background Jobs** - Render Cron Jobs:
+   - `jobs/daily-sync.ts` - Daily data sync at 2 AM UTC via Render cron service
+   - Manual syncs via `POST /api/clients/:id/sync` endpoint (fire-and-forget async)
+   - `services/client-sync.service.ts` - Shared sync logic used by both cron and manual triggers
+   - No queue system - direct function calls with throwing error contract
+   - Sequential client processing (parallelization can be added if needed)
+   - Job status tracked in `sync_jobs` table with concurrency guard
+   - Stale job cleanup runs before each daily sync
 
 7. **Logging** - Pino structured logging:
    - `@/utils/logger` exports multiple named loggers (logger, aiLogger, workerLogger)
@@ -229,17 +232,6 @@ Matching logic compares Google Ads queries against Search Console queries to ide
 - Implement retry logic (3 attempts with exponential backoff)
 - Respect Anthropic rate limits
 
-### BullMQ + Scheduler Pattern
-
-The scheduler (`workers/scheduler.ts`) uses Redis-based leader election to ensure exactly one scheduler runs across multiple workers:
-
-1. Process attempts `SETNX scheduler:leader <processId> EX 30`
-2. If successful, becomes leader and schedules jobs
-3. Leader refreshes lock every 30s via cron job
-4. If leader crashes, lock expires and another process takes over
-
-**Important:** Only enable scheduler in worker process via `RUN_SCHEDULER=true` env var.
-
 ### Mock Services for Development
 
 When `USE_MOCK_GOOGLE_APIS=true`:
@@ -257,10 +249,12 @@ Configured in `render.yaml`:
    - Start: `node dist/server.js`
    - Auto-deployment on push
 
-2. **Worker Service** - BullMQ workers
+2. **Cron Job Service** - Daily sync
    - Build: same as web service
-   - Start: `node dist/workers/index.js`
-   - Env: `RUN_SCHEDULER=true`
+   - Schedule: `0 2 * * *` (2 AM UTC)
+   - Command: `node dist/jobs/daily-sync.js`
+   - Runs independently of web service
+   - Includes stale job cleanup before each run
 
 3. **Static Site** - React frontend
    - Build: `cd apps/web && npm install && npm run build`
@@ -268,7 +262,6 @@ Configured in `render.yaml`:
 
 **External services:**
 - Database: Supabase Postgres (with Timescale extension)
-- Redis: Upstash Redis (serverless)
 - AI: Anthropic Claude API
 - Email: Resend
 - Encryption: AWS KMS
@@ -299,9 +292,7 @@ Configured in `render.yaml`:
 - **Primary DB**: Supabase Postgres 15 with Timescale extension
 - **Access**: `pg` Pool over SSL
 - **Migrations**: node-pg-migrate
-- **Queue**: BullMQ
-- **Redis**: Upstash Redis (serverless) for queues + leader election
-- **Hosting**: Render (web service + worker + static site)
+- **Hosting**: Render (web service + cron job + static site)
 - **Email**: Resend
 
 ## Code Conventions
@@ -325,9 +316,8 @@ Configured in `render.yaml`:
 NODE_ENV=development
 PORT=3001
 DATABASE_URL=postgresql://...
-UPSTASH_REDIS_URL=https://...
-UPSTASH_REDIS_TOKEN=...
-JWT_SECRET=...
+CLERK_PUBLISHABLE_KEY=...
+CLERK_SECRET_KEY=...
 COOKIE_SECRET=...
 FRONTEND_URL=http://localhost:5173
 GOOGLE_CLIENT_ID=...
@@ -335,13 +325,13 @@ GOOGLE_CLIENT_SECRET=...
 GOOGLE_REDIRECT_URI=http://localhost:3001/api/google/callback
 GOOGLE_ADS_DEVELOPER_TOKEN=...
 ANTHROPIC_API_KEY=...
+ENCRYPTION_MASTER_KEY=...
 AWS_REGION=ap-southeast-2
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 KMS_KEY_ID=...
 RESEND_API_KEY=...
 USE_MOCK_GOOGLE_APIS=true
-RUN_SCHEDULER=false  # true only in worker process
 ```
 
 ### Frontend (apps/web/.env)
@@ -358,21 +348,21 @@ These guidelines come from PROMPT.md and must be followed:
 2. **Follow coding best practices** - Clean abstractions, meaningful naming, modular files, minimal duplication, defensive error handling
 3. **Stay modular** - If any file approaches ~500 lines, split logic into smaller hooks/orchestrators/services
 4. **Consistent naming conventions** - Enforce via ESLint
-5. **Add Pino logging to all async operations** - Use appropriate logger (logger, aiLogger, workerLogger)
+5. **Add Pino logging to all async operations** - Use appropriate logger (logger, aiLogger, syncLogger, workerLogger)
 6. **Encrypt tokens before writing to DB** - Use `encryption.service.ts` with KMS
 7. **Store JWTs in HTTP-only cookies; rotate refresh tokens** - Never expose tokens to client JS
 8. **Implement mock Google services to unblock development** - Use `USE_MOCK_GOOGLE_APIS=true` for local dev
-9. **Ensure workers are Render-friendly** - Long-running processes, not serverless functions
-10. **Validate every request/response with Zod** - No unvalidated data
-11. **Rate limit Google & Claude APIs** - Implement backoff and respect quotas
-12. **Security first** - No plain text secrets, sanitize inputs, redact logs
+9. **Validate every request/response with Zod** - No unvalidated data
+10. **Rate limit Google & Claude APIs** - Implement backoff and respect quotas
+11. **Security first** - No plain text secrets, sanitize inputs, redact logs
 
 ## Key Files to Reference
 
 - `PROMPT.md` - Complete product specification and implementation roadmap (560 lines of detailed requirements)
 - `apps/api/src/server.ts` - Express app configuration
 - `apps/api/src/db/index.ts` - Database client with connection pooling
-- `apps/api/src/workers/scheduler.ts` - Job scheduling with leader election
+- `apps/api/src/jobs/daily-sync.ts` - Daily cron job for scheduled syncs
+- `apps/api/src/services/client-sync.service.ts` - Shared sync logic for scheduled and manual syncs
 - `apps/api/src/services/ai-analyzer.service.ts` - Claude integration
 - `apps/api/src/services/encryption.service.ts` - KMS encryption (not yet implemented)
 - `apps/api/src/services/password.service.ts` - bcrypt password hashing (not yet implemented)
@@ -421,13 +411,11 @@ The database uses Supabase Postgres with Timescale extension enabled. Key tables
 
 3. **Session Management** - Access token 15 minutes, refresh 7 days; rotation on every refresh. Sessions tied to DB record so revocation works even if JWT is copied.
 
-4. **Leader Election** - Use Redis key `scheduler:leader` to prevent duplicate cron job execution across multiple worker processes.
+4. **Input Validation** - Zod for all incoming payloads and external service responses (Google APIs, Claude API).
 
-5. **Input Validation** - Zod for all incoming payloads and external service responses (Google APIs, Claude API).
+5. **Logging Security** - Structured Pino logs with redaction of sensitive fields (tokens, passwords, encrypted_payload, etc.). No secrets in logs.
 
-6. **Logging Security** - Structured Pino logs with redaction of sensitive fields (tokens, passwords, encrypted_payload, etc.). No secrets in logs.
-
-7. **Rate Limiting** - Respect Google API and Claude API rate limits to prevent service interruption.
+6. **Rate Limiting** - Respect Google API and Claude API rate limits to prevent service interruption.
 
 ## Implementation Phases (from PROMPT.md)
 
@@ -450,11 +438,11 @@ The database uses Supabase Postgres with Timescale extension enabled. Key tables
 - Claude integration with Zod validation
 - Recommendation storage with encrypted snapshots
 
-### Week 4 – Workers & Scheduling
-- BullMQ + Upstash Redis integration
-- Distributed scheduler with leader election
-- Sync worker, analysis worker, competitor worker
-- Render worker deployment (RUN_SCHEDULER flag)
+### Week 4 – Scheduling & Background Jobs
+- Render Cron Jobs for daily syncs
+- Client sync service for reusable sync logic
+- Manual sync endpoint with fire-and-forget execution
+- Database-level concurrency control for sync jobs
 
 ### Week 5 – Frontend MVP
 - Onboarding flow, dashboards, recommendation list/detail
@@ -463,8 +451,8 @@ The database uses Supabase Postgres with Timescale extension enabled. Key tables
 
 ### Week 6 – Polish & Deploy
 - Error handling, skeleton states, toasts
-- Build & deploy to Render (web/api/worker)
-- Wire Supabase + Upstash production envs
+- Build & deploy to Render (web/api/cron job)
+- Wire Supabase production envs
 - Smoke tests with real Google accounts
 
 ### Weeks 7–8 – Competitor Intelligence (Phase 2)
@@ -480,7 +468,7 @@ The database uses Supabase Postgres with Timescale extension enabled. Key tables
 3. Daily sync pulls data and generates Claude recommendations
 4. Recommendations visible + actionable in dashboard
 5. Approval/reject flow updates recommendation status
-6. BullMQ scheduler runs exactly once per day per client (leader election working)
+6. Render cron job runs daily syncs successfully with concurrency control
 
 ### Phase 2 (Competitive Intelligence)
 1. Competitors auto-detected via Auction Insights
