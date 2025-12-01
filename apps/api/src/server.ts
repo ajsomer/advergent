@@ -15,6 +15,7 @@ import googleOAuthRoutes from './routes/google-oauth.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import analysisRoutes from './routes/analysis.routes.js';
 import debugRoutes from './routes/debug.routes.js';
+import csvUploadRoutes from './routes/csv-upload.routes.js';
 import { authenticate } from './middleware/auth.middleware.js';
 import { logger } from './utils/logger.js';
 
@@ -45,6 +46,7 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Da
 // Protected routes - use authenticate middleware
 app.use('/api/agency', authenticate, agencyRoutes);
 app.use('/api/clients', authenticate, clientRoutes);
+app.use('/api/clients', authenticate, csvUploadRoutes); // CSV upload routes for clients
 app.use('/api/recommendations', authenticate, recommendationRoutes);
 app.use('/api/competitors', authenticate, competitorRoutes);
 app.use('/api/google', authenticate, googleOAuthRoutes);

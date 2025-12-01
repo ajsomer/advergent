@@ -15,6 +15,7 @@ export const recommendationStatusEnum = pgEnum('recommendation_status', ['pendin
 export const jobTypeEnum = pgEnum('job_type', ['google_ads_sync', 'search_console_sync', 'full_sync']);
 export const jobStatusEnum = pgEnum('job_status', ['pending', 'running', 'completed', 'failed']);
 export const detectedViaEnum = pgEnum('detected_via', ['auction_insights']);
+export const dataSourceEnum = pgEnum('data_source', ['api', 'csv_upload']);
 
 // ============================================================================
 // CORE TABLES
@@ -123,11 +124,20 @@ export const googleAdsQueries = pgTable('google_ads_queries', {
   campaignName: varchar('campaign_name', { length: 255 }),
   adGroupId: varchar('ad_group_id', { length: 50 }),
   adGroupName: varchar('ad_group_name', { length: 255 }),
+  // CSV upload fields
+  dataSource: dataSourceEnum('data_source').default('api'),
+  matchType: varchar('match_type', { length: 20 }), // 'Phrase match', 'Exact match', 'Broad match'
+  criterionStatus: varchar('criterion_status', { length: 20 }), // 'Enabled', 'Paused', 'Removed'
+  campaignStatus: varchar('campaign_status', { length: 20 }),
+  adGroupStatus: varchar('ad_group_status', { length: 20 }),
+  dateRangeStart: date('date_range_start'), // For aggregated CSV data (no single date)
+  dateRangeEnd: date('date_range_end'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
 }, (table) => ({
   clientIdx: index('idx_google_ads_queries_client').on(table.clientAccountId),
   searchQueryIdx: index('idx_google_ads_queries_search_query').on(table.searchQueryId),
   dateIdx: index('idx_google_ads_queries_date').on(table.date),
+  dataSourceIdx: index('idx_google_ads_queries_data_source').on(table.dataSource),
   uniqueIdx: uniqueIndex('idx_google_ads_queries_unique').on(table.clientAccountId, table.searchQueryId, table.date),
 }));
 
@@ -318,6 +328,143 @@ export const analysisJobs = pgTable('analysis_jobs', {
 }));
 
 // ============================================================================
+// CSV UPLOAD TABLES
+// ============================================================================
+
+export const csvUploads = pgTable('csv_uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  uploadSessionId: uuid('upload_session_id').notNull(), // Groups multiple files from same upload
+  fileName: varchar('file_name', { length: 255 }).notNull(),
+  fileType: varchar('file_type', { length: 50 }).notNull(), // 'google_ads_searches', 'auction_insights', etc.
+  fileSize: integer('file_size').notNull(),
+  rowCount: integer('row_count').default(0),
+  dateRangeStart: date('date_range_start'),
+  dateRangeEnd: date('date_range_end'),
+  status: varchar('status', { length: 20 }).default('processing'), // 'processing', 'completed', 'failed', 'skipped'
+  errorMessage: text('error_message'),
+  uploadedBy: uuid('uploaded_by').references(() => users.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_csv_uploads_client').on(table.clientAccountId),
+  sessionIdx: index('idx_csv_uploads_session').on(table.uploadSessionId),
+  typeIdx: index('idx_csv_uploads_type').on(table.fileType),
+  statusIdx: index('idx_csv_uploads_status').on(table.status),
+}));
+
+// ============================================================================
+// AUCTION INSIGHTS (TIER 1 - COMPETITOR DATA)
+// ============================================================================
+// Google Ads Auction Insights can be exported at multiple levels:
+// - Account level (no segment columns)
+// - Campaign level (campaign_name populated)
+// - Ad Group level (campaign_name + ad_group_name populated)
+// - Keyword level (campaign_name + ad_group_name + keyword populated)
+//
+// For the multi-agent system to work correctly per the spec, we need
+// KEYWORD-LEVEL auction insights to provide per-battleground-keyword
+// competitive metrics.
+
+export const auctionInsights = pgTable('auction_insights', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  // Segment columns (determines granularity level)
+  campaignName: varchar('campaign_name', { length: 255 }), // Populated for campaign/ad_group/keyword level
+  adGroupName: varchar('ad_group_name', { length: 255 }), // Populated for ad_group/keyword level
+  keyword: varchar('keyword', { length: 500 }), // Populated for keyword level (most granular)
+  keywordMatchType: varchar('keyword_match_type', { length: 20 }), // 'Exact', 'Phrase', 'Broad'
+  // Competitor identification
+  competitorDomain: varchar('competitor_domain', { length: 255 }).notNull(),
+  isOwnAccount: boolean('is_own_account').default(false), // "You" row
+  // Date range
+  dateRangeStart: date('date_range_start').notNull(),
+  dateRangeEnd: date('date_range_end').notNull(),
+  // Core competitive metrics
+  impressionShare: decimal('impression_share', { precision: 5, scale: 2 }),
+  lostImpressionShareRank: decimal('lost_impression_share_rank', { precision: 5, scale: 2 }),
+  lostImpressionShareBudget: decimal('lost_impression_share_budget', { precision: 5, scale: 2 }),
+  // Additional competitive metrics
+  outrankingShare: decimal('outranking_share', { precision: 5, scale: 2 }),
+  overlapRate: decimal('overlap_rate', { precision: 5, scale: 2 }),
+  topOfPageRate: decimal('top_of_page_rate', { precision: 5, scale: 2 }),
+  positionAboveRate: decimal('position_above_rate', { precision: 5, scale: 2 }),
+  absTopOfPageRate: decimal('abs_top_of_page_rate', { precision: 5, scale: 2 }),
+  impressionShareBelowThreshold: boolean('impression_share_below_threshold').default(false), // Flag for "< 10%" values
+  dataSource: dataSourceEnum('data_source').default('csv_upload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_auction_insights_client').on(table.clientAccountId),
+  competitorIdx: index('idx_auction_insights_competitor').on(table.competitorDomain),
+  dateRangeIdx: index('idx_auction_insights_date_range').on(table.dateRangeStart, table.dateRangeEnd),
+  keywordIdx: index('idx_auction_insights_keyword').on(table.keyword),
+  campaignIdx: index('idx_auction_insights_campaign').on(table.campaignName),
+}));
+
+// ============================================================================
+// CAMPAIGN METRICS (TIER 2)
+// ============================================================================
+
+export const campaignMetrics = pgTable('campaign_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  campaignName: varchar('campaign_name', { length: 255 }).notNull(),
+  campaignGroupName: varchar('campaign_group_name', { length: 255 }),
+  campaignStatus: varchar('campaign_status', { length: 20 }), // 'Enabled', 'Paused'
+  dateRangeStart: date('date_range_start').notNull(),
+  dateRangeEnd: date('date_range_end').notNull(),
+  impressions: integer('impressions').default(0),
+  clicks: integer('clicks').default(0),
+  costMicros: bigint('cost_micros', { mode: 'number' }).default(0),
+  ctr: decimal('ctr', { precision: 5, scale: 4 }),
+  dataSource: dataSourceEnum('data_source').default('csv_upload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_campaign_metrics_client').on(table.clientAccountId),
+  campaignIdx: index('idx_campaign_metrics_campaign').on(table.campaignName),
+}));
+
+// ============================================================================
+// DEVICE METRICS (TIER 2)
+// ============================================================================
+
+export const deviceMetrics = pgTable('device_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  device: varchar('device', { length: 50 }).notNull(), // 'Computers', 'Mobile Phones', 'Tablets', 'TV screens'
+  dateRangeStart: date('date_range_start').notNull(),
+  dateRangeEnd: date('date_range_end').notNull(),
+  impressions: integer('impressions').default(0),
+  clicks: integer('clicks').default(0),
+  costMicros: bigint('cost_micros', { mode: 'number' }).default(0),
+  dataSource: dataSourceEnum('data_source').default('csv_upload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_device_metrics_client').on(table.clientAccountId),
+  deviceIdx: index('idx_device_metrics_device').on(table.device),
+}));
+
+// ============================================================================
+// DAILY ACCOUNT METRICS (TIER 2 - TIME SERIES)
+// ============================================================================
+
+export const dailyAccountMetrics = pgTable('daily_account_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  date: date('date').notNull(),
+  impressions: integer('impressions').default(0),
+  clicks: integer('clicks').default(0),
+  costMicros: bigint('cost_micros', { mode: 'number' }).default(0),
+  avgCpcMicros: bigint('avg_cpc_micros', { mode: 'number' }),
+  dataSource: dataSourceEnum('data_source').default('csv_upload'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  clientIdx: index('idx_daily_account_metrics_client').on(table.clientAccountId),
+  dateIdx: index('idx_daily_account_metrics_date').on(table.date),
+  uniqueIdx: uniqueIndex('idx_daily_account_metrics_unique').on(table.clientAccountId, table.date),
+}));
+
+// ============================================================================
 // RELATIONS
 // ============================================================================
 
@@ -357,6 +504,12 @@ export const clientAccountsRelations = relations(clientAccounts, ({ one, many })
   ga4Metrics: many(ga4Metrics),
   ga4LandingPageMetrics: many(ga4LandingPageMetrics),
   syncJobs: many(syncJobs),
+  // CSV upload related
+  csvUploads: many(csvUploads),
+  auctionInsights: many(auctionInsights),
+  campaignMetrics: many(campaignMetrics),
+  deviceMetrics: many(deviceMetrics),
+  dailyAccountMetrics: many(dailyAccountMetrics),
 }));
 
 export const searchQueriesRelations = relations(searchQueries, ({ one, many }) => ({
@@ -460,5 +613,48 @@ export const analysisJobsRelations = relations(analysisJobs, ({ one }) => ({
   queryOverlap: one(queryOverlaps, {
     fields: [analysisJobs.queryOverlapId],
     references: [queryOverlaps.id],
+  }),
+}));
+
+// ============================================================================
+// CSV UPLOAD RELATIONS
+// ============================================================================
+
+export const csvUploadsRelations = relations(csvUploads, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [csvUploads.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+  uploader: one(users, {
+    fields: [csvUploads.uploadedBy],
+    references: [users.id],
+  }),
+}));
+
+export const auctionInsightsRelations = relations(auctionInsights, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [auctionInsights.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+}));
+
+export const campaignMetricsRelations = relations(campaignMetrics, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [campaignMetrics.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+}));
+
+export const deviceMetricsRelations = relations(deviceMetrics, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [deviceMetrics.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+}));
+
+export const dailyAccountMetricsRelations = relations(dailyAccountMetrics, ({ one }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [dailyAccountMetrics.clientAccountId],
+    references: [clientAccounts.id],
   }),
 }));
