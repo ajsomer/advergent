@@ -1,10 +1,33 @@
 /**
  * Phase 4: Interplay Report Types
- * All TypeScript interfaces for the multi-agent SEO/SEM report system
+ *
+ * Common types (InterplayReportResponse, UnifiedRecommendation, etc.) are imported
+ * from @advergent/shared for single source of truth between frontend and backend.
+ *
+ * Backend-specific types (agent outputs, data constructors) are defined here.
  */
 
 // ============================================================================
-// SCOUT AGENT TYPES
+// SHARED TYPES - Re-export from @advergent/shared
+// ============================================================================
+
+export {
+  ReportStatus,
+  ReportTrigger,
+  RecommendationCategory,
+  ImpactLevel,
+  EffortLevel,
+  UnifiedRecommendation,
+  ExecutiveSummary,
+  InterplayReportDateRange,
+  InterplayReportMetadata,
+  InterplayReportResponse,
+} from '@advergent/shared';
+
+export type { UnifiedRecommendation as UnifiedRecommendationType } from '@advergent/shared';
+
+// ============================================================================
+// SCOUT AGENT TYPES (Backend-specific)
 // ============================================================================
 
 export type BattlegroundPriority = 'high' | 'medium' | 'low';
@@ -52,7 +75,7 @@ export interface ScoutFindings {
 }
 
 // ============================================================================
-// RESEARCHER AGENT TYPES
+// RESEARCHER AGENT TYPES (Backend-specific)
 // ============================================================================
 
 export type CompetitiveDataLevel = 'keyword' | 'account' | 'none';
@@ -95,11 +118,12 @@ export interface ResearcherData {
 }
 
 // ============================================================================
-// SEM AGENT TYPES
+// SEM AGENT TYPES (Backend-specific)
 // ============================================================================
 
+import type { ImpactLevel } from '@advergent/shared';
+
 export type SEMActionLevel = 'campaign' | 'ad_group' | 'keyword';
-export type ImpactLevel = 'high' | 'medium' | 'low';
 
 export interface SEMAction {
   action: string;
@@ -115,7 +139,7 @@ export interface SEMAgentOutput {
 }
 
 // ============================================================================
-// SEO AGENT TYPES
+// SEO AGENT TYPES (Backend-specific)
 // ============================================================================
 
 export interface SEOAction {
@@ -131,25 +155,10 @@ export interface SEOAgentOutput {
 }
 
 // ============================================================================
-// DIRECTOR AGENT TYPES
+// DIRECTOR AGENT TYPES (Backend-specific)
 // ============================================================================
 
-export type RecommendationCategory = 'sem' | 'seo' | 'hybrid';
-export type EffortLevel = 'high' | 'medium' | 'low';
-
-export interface UnifiedRecommendation {
-  title: string;
-  description: string;
-  type: RecommendationCategory;
-  impact: ImpactLevel;
-  effort: EffortLevel;
-  actionItems: string[];
-}
-
-export interface ExecutiveSummary {
-  summary: string;
-  keyHighlights: string[];
-}
+import type { ExecutiveSummary, UnifiedRecommendation } from '@advergent/shared';
 
 export interface DirectorOutput {
   executiveSummary: ExecutiveSummary;
@@ -157,35 +166,14 @@ export interface DirectorOutput {
 }
 
 // ============================================================================
-// ORCHESTRATOR TYPES
+// ORCHESTRATOR TYPES (Backend-specific)
 // ============================================================================
 
-export type ReportTrigger = 'client_creation' | 'manual' | 'scheduled';
-export type ReportStatus = 'pending' | 'researching' | 'analyzing' | 'completed' | 'failed';
+import type { ReportTrigger, InterplayReportResponse } from '@advergent/shared';
 
 export interface GenerateReportOptions {
   days?: number;
   trigger: ReportTrigger;
-}
-
-export interface InterplayReportResponse {
-  id: string;
-  clientAccountId: string;
-  status: ReportStatus;
-  dateRange: {
-    start: string;
-    end: string;
-    days: number;
-  };
-  executiveSummary?: ExecutiveSummary;
-  recommendations?: UnifiedRecommendation[];
-  metadata: {
-    tokensUsed?: number;
-    processingTimeMs?: number;
-    createdAt: string;
-    completedAt?: string;
-  };
-  error?: string;
 }
 
 export interface DebugReportResponse extends InterplayReportResponse {
@@ -197,7 +185,7 @@ export interface DebugReportResponse extends InterplayReportResponse {
 }
 
 // ============================================================================
-// DATA CONSTRUCTOR TYPES
+// DATA CONSTRUCTOR TYPES (Backend-specific)
 // ============================================================================
 
 export interface InterplayQueryData {

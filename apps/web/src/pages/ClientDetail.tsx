@@ -13,9 +13,10 @@ import { GA4MetricsTable } from '@/components/clients/GA4MetricsTable';
 import { AnalysisRunForm } from '@/components/clients/AnalysisRunForm';
 import { GA4LandingPageTable } from '@/components/clients/GA4LandingPageTable';
 import { FullAnalysisModal } from '@/components/clients/FullAnalysisModal';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { ArrowLeft, RefreshCw, FileText } from 'lucide-react';
+import { ReportsTab } from '@/components/clients/ReportsTab';
 
-type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'ga4' | 'analysis';
+type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'ga4' | 'analysis' | 'reports';
 
 export default function ClientDetail() {
   const { clientId } = useParams<{ clientId: string }>();
@@ -74,6 +75,7 @@ export default function ClientDetail() {
     { id: 'search-console' as const, label: 'Search Console', badge: searchConsoleData?.totalQueries },
     { id: 'ga4' as const, label: 'GA4 Analytics', badge: ga4Data?.totalMetrics },
     { id: 'analysis' as const, label: 'Analysis' },
+    { id: 'reports' as const, label: 'Reports', icon: FileText },
   ];
 
   return (
@@ -393,6 +395,11 @@ export default function ClientDetail() {
               onRun={(config) => runAnalysis.mutate(config)}
             />
           </div>
+        )}
+
+        {/* Reports Tab - SEO/SEM Interplay Reports */}
+        {activeTab === 'reports' && client && (
+          <ReportsTab clientId={clientId} client={client} />
         )}
 
       </div>

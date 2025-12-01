@@ -250,6 +250,7 @@ function formatReportResponse(report: any): InterplayReportResponse {
     id: report.id,
     clientAccountId: report.clientAccountId,
     status: report.status,
+    trigger: report.triggerType,
     dateRange: {
       start: report.dateRangeStart,
       end: report.dateRangeEnd,
