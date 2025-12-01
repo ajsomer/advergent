@@ -938,16 +938,25 @@ router.get('/:id/recommendations', async (req: Request, res: Response) => {
     // Enrich with query text
     const enrichedRecs = await Promise.all(
       recs.map(async (rec) => {
-        const [overlap] = await db
-          .select({ queryText: searchQueries.queryText })
-          .from(queryOverlaps)
-          .innerJoin(searchQueries, eq(queryOverlaps.searchQueryId, searchQueries.id))
-          .where(eq(queryOverlaps.id, rec.queryOverlapId))
-          .limit(1);
+        let queryText = 'Unknown query';
+
+        // For interplay recommendations, use the title instead of query text
+        if (rec.source === 'interplay_report' && rec.title) {
+          queryText = rec.title;
+        } else if (rec.queryOverlapId) {
+          // For legacy recommendations, fetch from query overlaps
+          const [overlap] = await db
+            .select({ queryText: searchQueries.queryText })
+            .from(queryOverlaps)
+            .innerJoin(searchQueries, eq(queryOverlaps.searchQueryId, searchQueries.id))
+            .where(eq(queryOverlaps.id, rec.queryOverlapId))
+            .limit(1);
+          queryText = overlap?.queryText || 'Unknown query';
+        }
 
         return {
           id: rec.id,
-          queryText: overlap?.queryText || 'Unknown query',
+          queryText,
           recommendationType: rec.recommendationType,
           confidenceLevel: rec.confidenceLevel,
           currentMonthlySpend: parseFloat(rec.currentMonthlySpend?.toString() || '0'),
@@ -957,6 +966,13 @@ router.get('/:id/recommendations', async (req: Request, res: Response) => {
           keyFactors: rec.keyFactors || [],
           status: rec.status,
           createdAt: rec.createdAt?.toISOString() || '',
+          // Include interplay report fields
+          source: rec.source,
+          category: rec.recommendationCategory,
+          title: rec.title,
+          impactLevel: rec.impactLevel,
+          effortLevel: rec.effortLevel,
+          actionItems: rec.actionItems,
         };
       })
     );

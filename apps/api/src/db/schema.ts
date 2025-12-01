@@ -17,6 +17,14 @@ export const jobStatusEnum = pgEnum('job_status', ['pending', 'running', 'comple
 export const detectedViaEnum = pgEnum('detected_via', ['auction_insights']);
 export const dataSourceEnum = pgEnum('data_source', ['api', 'csv_upload']);
 
+// Phase 4: Interplay Reports enums
+export const reportTriggerEnum = pgEnum('report_trigger', ['client_creation', 'manual', 'scheduled']);
+export const reportStatusEnum = pgEnum('report_status', ['pending', 'researching', 'analyzing', 'completed', 'failed']);
+export const recommendationSourceEnum = pgEnum('recommendation_source', ['legacy', 'interplay_report']);
+export const recommendationCategoryEnum = pgEnum('recommendation_category', ['sem', 'seo', 'hybrid']);
+export const impactLevelEnum = pgEnum('impact_level', ['high', 'medium', 'low']);
+export const effortLevelEnum = pgEnum('effort_level', ['high', 'medium', 'low']);
+
 // ============================================================================
 // CORE TABLES
 // ============================================================================
@@ -188,7 +196,7 @@ export const queryOverlaps = pgTable('query_overlaps', {
 export const recommendations = pgTable('recommendations', {
   id: uuid('id').primaryKey().defaultRandom(),
   clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
-  queryOverlapId: uuid('query_overlap_id').notNull().references(() => queryOverlaps.id, { onDelete: 'cascade' }),
+  queryOverlapId: uuid('query_overlap_id').references(() => queryOverlaps.id, { onDelete: 'cascade' }), // Now nullable for interplay recommendations
   recommendationType: recommendationTypeEnum('recommendation_type').notNull(),
   confidenceLevel: confidenceLevelEnum('confidence_level').notNull(),
   currentMonthlySpend: decimal('current_monthly_spend', { precision: 12, scale: 2 }),
@@ -203,12 +211,22 @@ export const recommendations = pgTable('recommendations', {
   approvedAt: timestamp('approved_at', { withTimezone: true }),
   appliedAt: timestamp('applied_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  // Phase 4: Interplay report fields
+  source: recommendationSourceEnum('source').default('legacy'),
+  interplayReportId: uuid('interplay_report_id').references(() => interplayReports.id, { onDelete: 'set null' }),
+  recommendationCategory: recommendationCategoryEnum('recommendation_category'),
+  title: varchar('title', { length: 255 }),
+  impactLevel: impactLevelEnum('impact_level'),
+  effortLevel: effortLevelEnum('effort_level'),
+  actionItems: text('action_items').array(),
 }, (table) => ({
   clientIdx: index('idx_recommendations_client').on(table.clientAccountId),
   overlapIdx: index('idx_recommendations_overlap').on(table.queryOverlapId),
   statusIdx: index('idx_recommendations_status').on(table.status),
   typeIdx: index('idx_recommendations_type').on(table.recommendationType),
   confidenceIdx: index('idx_recommendations_confidence').on(table.confidenceLevel),
+  interplayReportIdx: index('idx_recommendations_interplay_report').on(table.interplayReportId),
+  sourceIdx: index('idx_recommendations_source').on(table.source),
 }));
 
 export const competitors = pgTable('competitors', {
@@ -325,6 +343,46 @@ export const analysisJobs = pgTable('analysis_jobs', {
   overlapIdx: index('idx_analysis_jobs_overlap').on(table.queryOverlapId),
   statusIdx: index('idx_analysis_jobs_status').on(table.status),
   createdAtIdx: index('idx_analysis_jobs_created_at').on(table.createdAt),
+}));
+
+// ============================================================================
+// INTERPLAY REPORTS (PHASE 4)
+// ============================================================================
+
+export const interplayReports = pgTable('interplay_reports', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+  triggerType: reportTriggerEnum('trigger_type').notNull(),
+  status: reportStatusEnum('status').default('pending').notNull(),
+
+  // Date range analyzed
+  dateRangeStart: date('date_range_start').notNull(),
+  dateRangeEnd: date('date_range_end').notNull(),
+  dateRangeDays: integer('date_range_days').default(30).notNull(),
+
+  // Phase outputs (stored as encrypted JSON)
+  scoutFindingsEncrypted: text('scout_findings_encrypted'),
+  researcherDataEncrypted: text('researcher_data_encrypted'),
+  semAgentOutputEncrypted: text('sem_agent_output_encrypted'),
+  seoAgentOutputEncrypted: text('seo_agent_output_encrypted'),
+  directorOutputEncrypted: text('director_output_encrypted'),
+
+  // Final output (encrypted)
+  executiveSummaryEncrypted: text('executive_summary_encrypted'),
+  unifiedRecommendationsEncrypted: text('unified_recommendations_encrypted'),
+
+  // Metadata
+  tokensUsed: integer('tokens_used'),
+  processingTimeMs: integer('processing_time_ms'),
+  errorMessage: text('error_message'),
+
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+}, (table) => ({
+  clientIdx: index('idx_interplay_reports_client').on(table.clientAccountId),
+  statusIdx: index('idx_interplay_reports_status').on(table.status),
+  createdIdx: index('idx_interplay_reports_created').on(table.createdAt),
 }));
 
 // ============================================================================
@@ -510,6 +568,8 @@ export const clientAccountsRelations = relations(clientAccounts, ({ one, many })
   campaignMetrics: many(campaignMetrics),
   deviceMetrics: many(deviceMetrics),
   dailyAccountMetrics: many(dailyAccountMetrics),
+  // Phase 4: Interplay reports
+  interplayReports: many(interplayReports),
 }));
 
 export const searchQueriesRelations = relations(searchQueries, ({ one, many }) => ({
@@ -570,6 +630,10 @@ export const recommendationsRelations = relations(recommendations, ({ one }) => 
     fields: [recommendations.approvedBy],
     references: [users.id],
   }),
+  interplayReport: one(interplayReports, {
+    fields: [recommendations.interplayReportId],
+    references: [interplayReports.id],
+  }),
 }));
 
 export const competitorsRelations = relations(competitors, ({ one, many }) => ({
@@ -614,6 +678,18 @@ export const analysisJobsRelations = relations(analysisJobs, ({ one }) => ({
     fields: [analysisJobs.queryOverlapId],
     references: [queryOverlaps.id],
   }),
+}));
+
+// ============================================================================
+// INTERPLAY REPORTS RELATIONS
+// ============================================================================
+
+export const interplayReportsRelations = relations(interplayReports, ({ one, many }) => ({
+  clientAccount: one(clientAccounts, {
+    fields: [interplayReports.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+  recommendations: many(recommendations),
 }));
 
 // ============================================================================

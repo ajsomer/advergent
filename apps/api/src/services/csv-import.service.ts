@@ -32,6 +32,7 @@ import {
   isBelowThreshold,
 } from '@/utils/csv-column-mapper.js';
 import { normalizeQuery, hashQuery } from '@/services/query-matcher.service.js';
+import { generateInterplayReport, hasExistingReports } from '@/services/interplay-report/index.js';
 
 // ============================================================================
 // TYPES
@@ -158,18 +159,39 @@ export async function processUploadSession(
   );
 
   // Check if Tier 1 data was uploaded - this enables AI report generation
-  // Per Phase 4 spec (phase-4-multi-agent-system.md lines 2008-2056), CSV uploads
-  // should auto-trigger report generation when Tier 1 data is first uploaded
+  // Per Phase 4 spec, CSV uploads should auto-trigger report generation
+  // when Tier 1 data is first uploaded
   const tier1FileTypes = ['google_ads_searches', 'google_ads_keywords', 'auction_insights'];
   const hasTier1Data = result.imported.some(f => tier1FileTypes.includes(f.fileType));
 
   if (hasTier1Data) {
-    // TODO: Phase 4 - Trigger report generation when multi-agent system is implemented
-    // await triggerReportGeneration(clientAccountId);
-    logger.info(
-      { clientAccountId, sessionId, tier1Files: result.imported.filter(f => tier1FileTypes.includes(f.fileType)).map(f => f.fileType) },
-      'Tier 1 data uploaded - report generation eligible'
-    );
+    try {
+      // Check if this is the first data upload (no existing reports)
+      const hasReports = await hasExistingReports(clientAccountId);
+
+      if (!hasReports) {
+        logger.info(
+          { clientAccountId, sessionId },
+          'First Tier 1 data upload - triggering report generation'
+        );
+
+        // Fire-and-forget: don't await, don't block upload response
+        generateInterplayReport(clientAccountId, { days: 30, trigger: 'client_creation' })
+          .then((reportId) => {
+            logger.info({ clientAccountId, reportId }, 'Auto-triggered report generation complete');
+          })
+          .catch((err) => {
+            logger.error({ err, clientAccountId }, 'Auto-triggered report generation failed');
+          });
+      } else {
+        logger.info(
+          { clientAccountId, sessionId },
+          'Tier 1 data uploaded - report already exists, skipping auto-generation'
+        );
+      }
+    } catch (error) {
+      logger.error({ error, clientAccountId }, 'Failed to check/trigger report generation');
+    }
   }
 
   return result;

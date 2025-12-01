@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { getSearchAnalytics } from '@/services/search-console.service.js';
 import { normalizeQuery, hashQuery } from '@/services/query-matcher.service.js';
 import { syncLogger } from '@/utils/logger.js';
+import { generateInterplayReport, hasExistingReports } from '@/services/interplay-report/index.js';
 
 /**
  * Run data sync for a client from Google Ads and Search Console
@@ -384,6 +385,41 @@ export async function runClientSync(
         { clientId, recordsProcessed, trigger },
         'Sync completed successfully'
       );
+
+      // Auto-trigger report generation after first successful sync with Tier 1 data
+      // Per Phase 4 spec, OAuth syncs should auto-trigger report generation
+      // when meaningful data is first synced (Search Console, GA4, or Google Ads)
+      const hasTier1Data = scData.length > 0 || ga4Data.length > 0 || adsData.length > 0;
+
+      if (hasTier1Data) {
+        try {
+          // Check if this is the first sync (no existing reports)
+          const hasReports = await hasExistingReports(clientId);
+
+          if (!hasReports) {
+            syncLogger.info(
+              { clientId, trigger },
+              'First sync with Tier 1 data - triggering report generation'
+            );
+
+            // Fire-and-forget: don't await, don't block sync completion
+            generateInterplayReport(clientId, { days: 30, trigger: 'client_creation' })
+              .then((reportId) => {
+                syncLogger.info({ clientId, reportId }, 'Auto-triggered report generation complete');
+              })
+              .catch((err) => {
+                syncLogger.error({ err, clientId }, 'Auto-triggered report generation failed');
+              });
+          } else {
+            syncLogger.info(
+              { clientId, trigger },
+              'Tier 1 data synced - report already exists, skipping auto-generation'
+            );
+          }
+        } catch (error) {
+          syncLogger.error({ error, clientId }, 'Failed to check/trigger report generation');
+        }
+      }
 
       return { success: true, recordsProcessed };
     } catch (error) {
