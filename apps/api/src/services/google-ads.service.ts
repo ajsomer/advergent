@@ -12,6 +12,7 @@ export interface GoogleAdsQuery {
   clicks: number;
   costMicros: number;
   conversions: number;
+  conversionValue: number;
   ctr: number;
   averageCpc: number;
   campaignId: string;
@@ -20,7 +21,6 @@ export interface GoogleAdsQuery {
   adGroupName: string;
   date: string;
 }
-
 /**
  * Creates an authenticated Google Ads API client for a specific client account
  */
@@ -61,7 +61,6 @@ async function getClient(clientAccountId: string): Promise<{ client: GoogleAdsAp
 
   return { client: googleAdsClient, customerId: client.googleAdsCustomerId, refreshToken };
 }
-
 /**
  * Fetches search query performance report from Google Ads
  */
@@ -87,6 +86,7 @@ export async function getSearchQueryReport(
         metrics.clicks,
         metrics.cost_micros,
         metrics.conversions,
+        metrics.conversions_value,
         metrics.ctr,
         metrics.average_cpc,
         campaign.id,
@@ -117,6 +117,7 @@ export async function getSearchQueryReport(
         clicks: Number(row.metrics?.clicks || 0),
         costMicros: Number(row.metrics?.cost_micros || 0),
         conversions: Number(row.metrics?.conversions || 0),
+        conversionValue: Number(row.metrics?.conversions_value || 0),
         ctr: Number(row.metrics?.ctr || 0),
         averageCpc: Number(row.metrics?.average_cpc || 0),
         campaignId: String(row.campaign?.id || ''),
@@ -163,6 +164,68 @@ export async function getCustomerIds(clientAccountId: string): Promise<string[]>
   } catch (error) {
     logger.error({ error, clientAccountId }, 'Failed to fetch customer IDs');
     throw error;
+  }
+}
+
+/**
+ * Fetches competitive metrics for keywords (Impression Share, Lost IS)
+ * Used by SEM Agent for "Active Research"
+ */
+export async function getKeywordCompetitiveMetrics(
+  clientAccountId: string,
+  startDate: string,
+  endDate: string,
+  keywords: string[]
+): Promise<Map<string, { impressionShare: number; lostIsRank: number; lostIsBudget: number }>> {
+  try {
+    const { client: googleAdsClient, customerId, refreshToken } = await getClient(clientAccountId);
+
+    const customer = googleAdsClient.Customer({
+      customer_id: customerId,
+      refresh_token: refreshToken,
+    });
+
+    // We can't easily filter by keyword text in GAQL with a large list in IN clause safely
+    // So we'll fetch top keywords by spend/impressions and map them in memory
+    // or we can try to filter if the list is small.
+    // For the "Scout" phase, we only have 5-10 keywords, so we can construct a WHERE clause.
+
+    // Escape keywords for GAQL
+    const escapedKeywords = keywords.map(k => k.replace(/'/g, "\\'"));
+    const whereClause = escapedKeywords.length > 0
+      ? `AND ad_group_criterion.keyword.text IN ('${escapedKeywords.join("','")}')`
+      : '';
+
+    const query = `
+      SELECT
+        ad_group_criterion.keyword.text,
+        metrics.search_impression_share,
+        metrics.search_rank_lost_impression_share,
+        metrics.search_budget_lost_impression_share
+      FROM keyword_view
+      WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
+        ${whereClause}
+      ORDER BY metrics.cost_micros DESC
+    `;
+
+    const results = new Map<string, { impressionShare: number; lostIsRank: number; lostIsBudget: number }>();
+    const stream = customer.queryStream(query);
+
+    for await (const row of stream) {
+      const text = row.ad_group_criterion?.keyword?.text;
+      if (text) {
+        results.set(text, {
+          impressionShare: Number(row.metrics?.search_impression_share || 0),
+          lostIsRank: Number(row.metrics?.search_rank_lost_impression_share || 0),
+          lostIsBudget: Number(row.metrics?.search_budget_lost_impression_share || 0),
+        });
+      }
+    }
+
+    return results;
+  } catch (error) {
+    logger.error({ error, clientAccountId }, 'Failed to fetch keyword competitive metrics');
+    return new Map(); // Return empty map on error to allow analysis to proceed without it
   }
 }
 

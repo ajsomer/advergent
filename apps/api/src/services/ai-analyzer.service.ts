@@ -4,6 +4,13 @@ import { z } from 'zod';
 import { logger } from '@/utils/logger.js';
 import { config } from '@/config/index.js';
 import type { QueryOverlap } from './query-matcher.service.js';
+import { SemAgent } from './analysis-agents/sem-agent.js';
+import { SeoAgent } from './analysis-agents/seo-agent.js';
+import { StrategyAgent } from './analysis-agents/strategy-agent.js';
+import { InterplayData, AgentContext, StrategyAnalysis, QueryData, GA4PageMetrics } from './analysis-agents/types.js';
+import { GoogleAdsQuery } from './google-ads.service.js';
+import { SearchConsoleQuery } from './search-console.service.js';
+import { GA4LandingPageMetric } from './ga4.service.js';
 
 export const aiLogger = logger.child({ module: 'ai-analyzer' });
 
@@ -43,6 +50,62 @@ export const searchConsoleAnalysisSchema = z.object({
 });
 
 export type SearchConsoleAnalysis = z.infer<typeof searchConsoleAnalysisSchema>;
+
+/**
+ * Zod schema for landing page-grouped analysis (new structured format)
+ */
+export const queryRecommendationSchema = z.object({
+  query: z.string(),
+  currentPosition: z.number(),
+  impressions: z.number(),
+  clicks: z.number(),
+  ctr: z.number(),
+  type: z.enum(['quick_win', 'high_potential', 'underperforming', 'maintain']),
+  potentialImpact: z.enum(['high', 'medium', 'low', 'very_high', 'critical']),
+  action: z.string(),
+  reasoning: z.string()
+});
+
+export const pageIssueSchema = z.object({
+  category: z.enum(['content', 'ux', 'engagement', 'conversion', 'seo']),
+  priority: z.enum(['high', 'medium', 'low', 'very_high', 'critical']),
+  issue: z.string(),
+  action: z.string()
+});
+
+export const landingPageRecommendationSchema = z.object({
+  page: z.string(),
+  pageScore: z.number().min(0).max(100),
+  totalImpressions: z.number(),
+  totalClicks: z.number(),
+  ga4Metrics: z.object({
+    sessions: z.number(),
+    engagementRate: z.number(),
+    bounceRate: z.number(),
+    conversions: z.number(),
+    revenue: z.number()
+  }).optional(),
+  queryRecommendations: z.array(queryRecommendationSchema),
+  pageRecommendations: z.array(pageIssueSchema)
+});
+
+export const groupedSearchConsoleAnalysisSchema = z.object({
+  summary: z.string().min(10),
+  overallTrends: z.array(z.string()).min(1),
+  landingPageAnalysis: z.array(landingPageRecommendationSchema),
+  topQuickWins: z.array(z.object({
+    page: z.string(),
+    query: z.string(),
+    action: z.string(),
+    estimatedImpact: z.string()
+  })).max(10),
+  strategicAdvice: z.string().min(10)
+});
+
+export type QueryRecommendation = z.infer<typeof queryRecommendationSchema>;
+export type PageIssue = z.infer<typeof pageIssueSchema>;
+export type LandingPageRecommendation = z.infer<typeof landingPageRecommendationSchema>;
+export type GroupedSearchConsoleAnalysis = z.infer<typeof groupedSearchConsoleAnalysisSchema>;
 
 /**
  * Optional client context to enhance AI analysis
@@ -96,23 +159,29 @@ ${clientContext.competitiveLevel ? `- Competitive Level: ${clientContext.competi
     }
   }
 
-  return `You are an expert SEO/PPC analyst. Analyze this query overlap data and provide a recommendation.
-
-Query: "${queryText}"
-${contextSection}
+  const googleAdsSection = googleAds ? `
 Google Ads Data:
 - CPC: $${googleAds.cpc.toFixed(2)}
 - Monthly Spend: $${googleAds.spend.toFixed(2)}
 - Clicks: ${googleAds.clicks}
 - Conversions: ${googleAds.conversions}
 - Conversion Value: $${googleAds.conversionValue.toFixed(2)}
-- Position: Paid ads (top of SERP)
+- Position: Paid ads (top of SERP)` : `
+Google Ads Data:
+- No paid data available for this query`;
+
+  return `You are an expert SEO/PPC analyst. Analyze this query overlap data and provide a recommendation.
+
+Query: "${queryText}"
+${contextSection}
+${googleAdsSection}
 
 Search Console Data:
 - Organic Position: ${searchConsole.position.toFixed(1)}
 - CTR: ${(searchConsole.ctr * 100).toFixed(2)}%
 - Impressions: ${searchConsole.impressions}
-- Clicks: ${searchConsole.clicks}${landingPageSection}
+- Clicks: ${searchConsole.clicks}
+${landingPageSection}
 
 Consider:
 1. Competitive dynamics (is this a competitive keyword?)
@@ -133,6 +202,7 @@ Provide a recommendation in JSON format:
   "key_factors": ["factor1", "factor2", "factor3"]
 }`;
 }
+
 
 /**
  * Build the analysis prompt for Search Console data
@@ -169,7 +239,7 @@ Client Context:
 ${clientContext.industry ? `- Industry: ${clientContext.industry}` : ''}
 ${clientContext.targetMarket ? `- Target Market: ${clientContext.targetMarket}` : ''}
 ${clientContext.competitiveLevel ? `- Competitive Level: ${clientContext.competitiveLevel}` : ''}
-`;
+  `;
   }
 
   // Format top queries with GA4 engagement data if available
@@ -275,6 +345,214 @@ Provide an analysis in this exact JSON format:
     "gaps": ["engagement issues", "content gaps", "UX problems"],
     "suggestions": ["ranking improvements", "engagement optimizations", "conversion enhancements"]
   }
+}`;
+}
+
+/**
+ * Build the analysis prompt for grouped landing page analysis
+ */
+function buildGroupedSearchConsolePrompt(
+  data: {
+    queries: any[];
+    totalQueries: number;
+    dateRange: { startDate: string; endDate: string };
+    queriesByLandingPage?: Array<{
+      page: string;
+      queries: any[];
+      totalImpressions: number;
+      totalClicks: number;
+      ga4Metrics?: {
+        sessions: number;
+        engagementRate: number;
+        bounceRate: number;
+        conversions: number;
+        revenue: number;
+      };
+    }>;
+  },
+  clientContext?: ClientContext,
+  pageAnalysis?: {
+    url: string;
+    content: string;
+  }
+): string {
+  let contextSection = '';
+  if (clientContext) {
+    contextSection = `
+Client Context:
+${clientContext.industry ? `- Industry: ${clientContext.industry}` : ''}
+${clientContext.targetMarket ? `- Target Market: ${clientContext.targetMarket}` : ''}
+${clientContext.competitiveLevel ? `- Competitive Level: ${clientContext.competitiveLevel}` : ''}
+`;
+  }
+
+  // Sort landing pages by total clicks (descending) and limit to top 5 (reduced to avoid JSON parse errors)
+  const topPages = data.queriesByLandingPage
+    ? data.queriesByLandingPage
+      .sort((a, b) => b.totalClicks - a.totalClicks)
+      .slice(0, 5)
+    : [];
+
+  // Build detailed landing page sections
+  let landingPagesDetail = '';
+  if (topPages.length > 0) {
+    landingPagesDetail = topPages.map((pageData, index) => {
+      const pageNum = index + 1;
+      let pageSection = `\n--- Landing Page ${pageNum} ---\nURL: ${pageData.page}\nTotal Clicks: ${pageData.totalClicks}\nTotal Impressions: ${pageData.totalImpressions}\nNumber of Ranking Queries: ${pageData.queries.length}`;
+
+      // GA4 metrics if available
+      if (pageData.ga4Metrics) {
+        const ga4 = pageData.ga4Metrics;
+        pageSection += `
+
+GA4 Organic Engagement (Google/Organic Traffic Only):
+- Sessions: ${ga4.sessions}
+- Engagement Rate: ${(ga4.engagementRate * 100).toFixed(1)}%
+- Bounce Rate: ${(ga4.bounceRate * 100).toFixed(1)}%
+- Conversions: ${ga4.conversions.toFixed(1)}
+- Revenue: $${ga4.revenue.toFixed(2)}`;
+
+        // Health indicators
+        const healthIndicators: string[] = [];
+        if (ga4.engagementRate < 0.3) healthIndicators.push('⚠️ Low engagement rate');
+        if (ga4.bounceRate > 0.7) healthIndicators.push('⚠️ High bounce rate');
+        if (ga4.conversions > 0 && ga4.engagementRate > 0.5) healthIndicators.push('✅ Strong converter');
+        if (healthIndicators.length > 0) {
+          pageSection += `\nHealth Indicators: ${healthIndicators.join(', ')}`;
+        }
+      } else {
+        pageSection += `\n\nGA4 Data: Not available for this page.`;
+      }
+
+      // Top queries for this page (sorted by impressions) - limit to 5 to reduce response size
+      const topQueriesForPage = pageData.queries
+        .sort((a, b) => b.impressions - a.impressions)
+        .slice(0, 5);
+
+      pageSection += `\n\nTop Queries for This Page:`;
+      topQueriesForPage.forEach((q, i) => {
+        pageSection += `\n${i + 1}. "${q.query}"
+   - Position: ${q.position.toFixed(1)}
+   - Clicks: ${q.clicks} | Impressions: ${q.impressions}
+   - CTR: ${(q.ctr * 100).toFixed(2)}%`;
+        if (q.ga4Engagement) {
+          pageSection += `
+   - GA4: ${(q.ga4Engagement.engagementRate * 100).toFixed(1)}% engagement, ${(q.ga4Engagement.bounceRate * 100).toFixed(1)}% bounce`;
+        }
+      });
+
+      return pageSection;
+    }).join('\n\n');
+  }
+
+  return `You are an expert SEO analyst. Analyze this Search Console data grouped by landing pages and provide STRUCTURED recommendations for each page.
+
+${contextSection}
+
+Data Summary:
+- Date Range: ${data.dateRange.startDate} to ${data.dateRange.endDate}
+- Total Queries Analyzed: ${data.totalQueries}
+- Landing Pages Analyzed: ${topPages.length}
+
+${landingPagesDetail}
+
+${pageAnalysis ? `
+Content Analysis for Top Page:
+URL: ${pageAnalysis.url}
+Content Preview:
+"${pageAnalysis.content.slice(0, 500)}..."
+` : ''}
+
+Your task is to analyze EACH landing page independently and provide:
+
+1. **Page Health Score (0-100)**: Based on GSC performance + GA4 engagement metrics
+   - Consider: organic rankings, CTR, engagement rate, bounce rate, conversions
+   - Lower scores for poor engagement or high bounce rates
+   - Higher scores for strong rankings + good user engagement
+
+2. **Query-Level Recommendations**: For each page, analyze the top queries and categorize them:
+   - **quick_win**: Queries at position 4-10 that could easily reach top 3
+   - **high_potential**: Queries with high impressions but low CTR or engagement
+   - **underperforming**: Queries with good position but poor engagement/conversions
+   - **maintain**: Queries performing well, keep monitoring
+
+   For each query recommendation, provide:
+   - Specific actionable advice (e.g., "Optimize title tag to include 'X'", "Add FAQ schema", "Improve content for search intent")
+   - Clear reasoning based on the data
+   - **potentialImpact**: MUST be one of these exact values: "critical", "very_high", "high", "medium", "low" (no other values allowed)
+
+3. **Page-Level Recommendations**: Identify issues affecting the entire page:
+   - **content**: Content gaps, quality issues, missing information
+   - **ux**: User experience problems (high bounce, low engagement)
+   - **engagement**: Session duration, interaction issues
+   - **conversion**: Conversion optimization opportunities
+   - **seo**: Technical SEO issues (meta tags, schema, internal linking)
+   - **priority**: MUST be one of these exact values: "critical", "very_high", "high", "medium", "low" (no other values allowed)
+
+4. **Top Quick Wins**: Across all pages, identify the 3-5 highest-impact actions that can be implemented quickly.
+
+IMPORTANT: Return ONLY valid JSON without any markdown formatting or code blocks. Do not wrap your response in backtick code blocks.
+
+CRITICAL REQUIREMENTS FOR JSON RESPONSE:
+- "potentialImpact" field: ONLY use these exact values: "critical", "very_high", "high", "medium", or "low"
+- "priority" field: ONLY use these exact values: "critical", "very_high", "high", "medium", or "low"
+- "type" field: ONLY use these exact values: "quick_win", "high_potential", "underperforming", or "maintain"
+- "category" field: ONLY use these exact values: "content", "ux", "engagement", "conversion", or "seo"
+- DO NOT use ANY other values for these fields or the response will be rejected
+
+Provide your analysis in this EXACT JSON format:
+{
+  "summary": "Executive summary of overall organic search performance across all landing pages (2-3 sentences)",
+  "overallTrends": [
+    "Trend 1 across multiple pages",
+    "Trend 2 based on GA4 correlation",
+    "Trend 3 highlighting opportunities"
+  ],
+  "landingPageAnalysis": [
+    {
+      "page": "Full URL of the landing page",
+      "pageScore": 75,
+      "totalImpressions": 12500,
+      "totalClicks": 890,
+      "ga4Metrics": {
+        "sessions": 850,
+        "engagementRate": 0.65,
+        "bounceRate": 0.35,
+        "conversions": 12,
+        "revenue": 450.50
+      },
+      "queryRecommendations": [
+        {
+          "query": "specific search query",
+          "currentPosition": 5.2,
+          "impressions": 3500,
+          "clicks": 150,
+          "ctr": 0.043,
+          "type": "quick_win",
+          "potentialImpact": "high",
+          "action": "Optimize H1 and title tag to include exact match keyword. Add FAQ schema.",
+          "reasoning": "Position 5.2 with high impressions suggests strong relevance but needs better visibility to capture top 3 spot"
+        }
+      ],
+      "pageRecommendations": [
+        {
+          "category": "ux",
+          "priority": "high",
+          "issue": "Bounce rate of 45% is above industry average",
+          "action": "Improve page load speed and add engaging visual content above the fold"
+        }
+      ]
+    }
+  ],
+  "topQuickWins": [
+    {
+      "page": "URL of page",
+      "query": "specific query",
+      "action": "Specific action to take",
+      "estimatedImpact": "Expected result (e.g., 'Could move from position 6 to top 3, gaining ~150 clicks/month')"
+    }
+  ],
+  "strategicAdvice": "High-level strategic advice for improving overall organic performance (2-3 sentences)"
 }`;
 }
 
@@ -420,7 +698,7 @@ export async function analyzeQueryOverlap(
         ? config.anthropicModel
         : config.openaiModel,
       query: overlap.queryText,
-      spend: overlap.googleAds.spend,
+      spend: overlap.googleAds?.spend ?? 0,
       position: overlap.searchConsole.position,
     },
     'Starting AI analysis'
@@ -578,6 +856,140 @@ export async function analyzeSearchConsoleData(
 }
 
 /**
+ * Analyze Search Console data with landing page grouping using configured AI provider
+ */
+export async function analyzeSearchConsoleDataGrouped(
+  data: {
+    queries: any[];
+    totalQueries: number;
+    dateRange: { startDate: string; endDate: string };
+    queriesByLandingPage?: Array<{
+      page: string;
+      queries: any[];
+      totalImpressions: number;
+      totalClicks: number;
+      ga4Metrics?: {
+        sessions: number;
+        engagementRate: number;
+        bounceRate: number;
+        conversions: number;
+        revenue: number;
+      };
+    }>;
+  },
+  clientContext?: ClientContext,
+  pageAnalysis?: {
+    url: string;
+    content: string;
+  }
+): Promise<GroupedSearchConsoleAnalysis> {
+  const prompt = buildGroupedSearchConsolePrompt(data, clientContext, pageAnalysis);
+
+  aiLogger.info(
+    {
+      provider: config.aiProvider,
+      queryCount: data.queries.length,
+      landingPageCount: data.queriesByLandingPage?.length || 0,
+    },
+    'Starting grouped Search Console AI analysis'
+  );
+
+  try {
+    let analysis: GroupedSearchConsoleAnalysis;
+    const maxRetries = 3;
+    const baseDelay = 1000;
+
+    const executeAnalysis = async (retryCount: number = 0): Promise<GroupedSearchConsoleAnalysis> => {
+      const startTime = Date.now();
+      try {
+        let responseText = '';
+
+        aiLogger.info({ promptLength: prompt.length, promptPreview: prompt.slice(0, 200) + '...' }, 'Sending grouped prompt to AI');
+
+        if (config.aiProvider === 'anthropic') {
+          if (!config.anthropicApiKey) throw new Error('Anthropic API key not configured');
+          const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+          const message = await anthropic.messages.create({
+            model: config.anthropicModel,
+            max_tokens: 8192, // Increased for comprehensive grouped analysis
+            messages: [{ role: 'user', content: prompt }],
+          });
+          responseText = message.content[0].type === 'text' ? message.content[0].text : '';
+        } else {
+          if (!config.openaiApiKey) throw new Error('OpenAI API key not configured');
+          const openai = new OpenAI({ apiKey: config.openaiApiKey });
+          const completion = await openai.chat.completions.create({
+            model: config.openaiModel,
+            max_tokens: 8192, // Increased for comprehensive grouped analysis
+            messages: [{ role: 'user', content: prompt }],
+            response_format: { type: 'json_object' },
+          });
+          responseText = completion.choices[0]?.message?.content || '';
+        }
+
+        const duration = Date.now() - startTime;
+        aiLogger.info({ durationMs: duration, responseLength: responseText.length, responsePreview: responseText.slice(0, 200) + '...' }, 'Received grouped AI response');
+
+        // Parse and validate - handle both markdown wrapped and raw JSON
+        let jsonText = responseText;
+
+        // Remove markdown code blocks if present
+        const markdownMatch = responseText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+        if (markdownMatch) {
+          jsonText = markdownMatch[1];
+          aiLogger.debug('Extracted JSON from markdown code block');
+        } else {
+          // Try to find JSON object in the response
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[0];
+          }
+        }
+
+        if (!jsonText || (!jsonText.trim().startsWith('{') && !jsonText.trim().startsWith('['))) {
+          aiLogger.error({ responseText: responseText.slice(0, 500) }, 'No valid JSON found in response');
+          throw new Error('No JSON found in response');
+        }
+
+        const parsed = JSON.parse(jsonText);
+        return groupedSearchConsoleAnalysisSchema.parse(parsed);
+
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        aiLogger.warn({
+          error: error instanceof Error ? error.message : 'Unknown error',
+          attempt: retryCount + 1,
+          durationMs: duration,
+          errorType: error instanceof SyntaxError ? 'JSON_PARSE_ERROR' : 'OTHER'
+        }, 'Grouped AI analysis attempt failed');
+        if (retryCount < maxRetries) {
+          const delay = baseDelay * Math.pow(2, retryCount);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return executeAnalysis(retryCount + 1);
+        }
+        throw error;
+      }
+    };
+
+    analysis = await executeAnalysis();
+
+    aiLogger.info({
+      summary: analysis.summary,
+      landingPageCount: analysis.landingPageAnalysis.length,
+      quickWinsCount: analysis.topQuickWins.length
+    }, 'Grouped Search Console AI analysis complete');
+    return analysis;
+
+  } catch (error) {
+    aiLogger.error(
+      { error: error instanceof Error ? error.message : 'Unknown error' },
+      'Grouped Search Console AI analysis failed'
+    );
+    throw error;
+  }
+}
+
+/**
  * Batch analyze multiple query overlaps with rate limiting
  */
 export async function analyzeBatchQueryOverlaps(
@@ -633,3 +1045,242 @@ export async function analyzeBatchQueryOverlaps(
 
   return results;
 }
+/**
+ * Generic function to call AI with a prompt and return the raw JSON response
+ * Used by specialized agents (SEM, SEO, Strategy)
+ */
+export async function callGenericAI(
+  prompt: string,
+  modelOverride?: string
+): Promise<string> {
+  const maxRetries = 3;
+  const baseDelay = 1000;
+
+  const executeCall = async (retryCount: number = 0): Promise<string> => {
+    try {
+      let responseText = '';
+
+      if (config.aiProvider === 'anthropic') {
+        if (!config.anthropicApiKey) throw new Error('Anthropic API key not configured');
+        const anthropic = new Anthropic({ apiKey: config.anthropicApiKey });
+
+        const message = await anthropic.messages.create({
+          model: modelOverride || config.anthropicModel,
+          max_tokens: 4096,
+          messages: [{ role: 'user', content: prompt }],
+        });
+
+        responseText = message.content[0].type === 'text' ? message.content[0].text : '';
+      } else {
+        if (!config.openaiApiKey) throw new Error('OpenAI API key not configured');
+        const openai = new OpenAI({ apiKey: config.openaiApiKey });
+
+        const completion = await openai.chat.completions.create({
+          model: modelOverride || config.openaiModel,
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+        });
+
+        responseText = completion.choices[0]?.message?.content || '';
+      }
+
+      // Extract JSON if wrapped in markdown
+      const markdownMatch = responseText.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
+      if (markdownMatch) {
+        return markdownMatch[1];
+      }
+
+      // Try to find JSON object
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return jsonMatch[0];
+      }
+
+      return responseText;
+    } catch (error) {
+      if (retryCount < maxRetries) {
+        const delay = baseDelay * Math.pow(2, retryCount);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return executeCall(retryCount + 1);
+      }
+      throw error;
+    }
+  };
+
+  return executeCall();
+}
+
+/**
+ * Orchestrates the multi-agent SEO/SEM analysis workflow
+ */
+export async function runSeoSemAnalysis(
+  data: InterplayData,
+  context: AgentContext,
+  dateRange: { startDate: string; endDate: string }
+): Promise<StrategyAnalysis> {
+  aiLogger.info({ clientId: context.clientId }, 'Starting SEO/SEM Multi-Agent Analysis');
+
+  const semAgent = new SemAgent(context);
+  const seoAgent = new SeoAgent(context);
+  const strategyAgent = new StrategyAgent(context);
+
+  // Phase 1 & 2: Parallel Execution of Specialist Agents (Research + Analysis)
+  // They handle their own "Active Research" internally
+  const [semResults, seoResults] = await Promise.all([
+    semAgent.analyze(data, dateRange),
+    seoAgent.analyze(data)
+  ]);
+
+  aiLogger.info('Specialist agents finished. Starting Strategy synthesis.');
+
+  // Phase 3: Strategy Synthesis
+  const finalReport = await strategyAgent.analyze(semResults, seoResults);
+
+  aiLogger.info('SEO/SEM Multi-Agent Analysis complete');
+  return finalReport;
+}
+
+/**
+ * Merges data from Google Ads, Search Console, and GA4 into a unified dataset
+ */
+export function constructInterplayData(
+  googleAdsData: GoogleAdsQuery[],
+  searchConsoleData: SearchConsoleQuery[],
+  ga4Data: GA4LandingPageMetric[]
+): InterplayData {
+  const queryMap = new Map<string, QueryData>();
+
+  // Helper to get or create
+  const getOrCreate = (q: string) => {
+    const normalized = q.toLowerCase().trim();
+    if (!queryMap.has(normalized)) {
+      queryMap.set(normalized, { query: q });
+    }
+    return queryMap.get(normalized)!;
+  };
+
+  // Process Google Ads
+  for (const row of googleAdsData) {
+    const q = getOrCreate(row.searchTerm);
+    q.googleAds = {
+      spend: row.costMicros / 1000000,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      cpc: row.averageCpc / 1000000,
+      conversions: row.conversions,
+      conversionValue: row.conversionValue,
+      roas: 0
+    };
+    // Calculate ROAS
+    if (q.googleAds.spend > 0) {
+      q.googleAds.roas = q.googleAds.conversionValue / q.googleAds.spend;
+    }
+  }
+
+  // Process Search Console
+  for (const row of searchConsoleData) {
+    const q = getOrCreate(row.query);
+    q.searchConsole = {
+      position: row.position,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      ctr: row.ctr,
+      url: row.page
+    };
+  }
+
+  // Process GA4 (Map URL -> Metrics)
+  // Aggregate metrics by URL (since GA4 data is daily/segmented)
+  const ga4Aggregates = new Map<string, {
+    sessions: number;
+    revenue: number;
+    conversions: number;
+    weightedEngagement: number;
+    weightedBounce: number;
+    weightedDuration: number;
+  }>();
+
+  for (const row of ga4Data) {
+    let path = row.landingPage.split('?')[0];
+    // Normalize to ensure it matches GSC URL path
+    // GSC URL: https://example.com/foo
+    // GA4 Path: /foo
+
+    if (!ga4Aggregates.has(path)) {
+      ga4Aggregates.set(path, {
+        sessions: 0,
+        revenue: 0,
+        conversions: 0,
+        weightedEngagement: 0,
+        weightedBounce: 0,
+        weightedDuration: 0
+      });
+    }
+
+    const agg = ga4Aggregates.get(path)!;
+    agg.sessions += row.sessions;
+    agg.revenue += row.totalRevenue;
+    agg.conversions += row.conversions;
+    agg.weightedEngagement += row.engagementRate * row.sessions;
+    agg.weightedBounce += row.bounceRate * row.sessions;
+    agg.weightedDuration += row.averageSessionDuration * row.sessions;
+  }
+
+  // Convert to GA4PageMetrics
+  const finalGa4Map = new Map<string, GA4PageMetrics>();
+  for (const [path, agg] of ga4Aggregates.entries()) {
+    if (agg.sessions > 0) {
+      finalGa4Map.set(path, {
+        sessions: agg.sessions,
+        revenue: agg.revenue,
+        conversions: agg.conversions,
+        engagementRate: agg.weightedEngagement / agg.sessions,
+        bounceRate: agg.weightedBounce / agg.sessions,
+        averageSessionDuration: agg.weightedDuration / agg.sessions
+      });
+    }
+  }
+
+  // Attach GA4 to Queries
+  for (const q of queryMap.values()) {
+    if (q.searchConsole?.url) {
+      try {
+        const urlObj = new URL(q.searchConsole.url);
+        const path = urlObj.pathname;
+        const metrics = finalGa4Map.get(path) || finalGa4Map.get(q.searchConsole.url); // Try path then full URL
+        if (metrics) {
+          q.ga4Metrics = metrics;
+        }
+      } catch (e) {
+        // Invalid URL, try direct match
+        const metrics = finalGa4Map.get(q.searchConsole.url);
+        if (metrics) {
+          q.ga4Metrics = metrics;
+        }
+      }
+    }
+  }
+
+  // Calculate Summary
+  const summary = {
+    totalSpend: 0,
+    totalRevenue: 0,
+    totalOrganicClicks: 0
+  };
+
+  for (const q of queryMap.values()) {
+    if (q.googleAds) summary.totalSpend += q.googleAds.spend;
+    if (q.ga4Metrics) summary.totalRevenue += q.ga4Metrics.revenue; // This might double count if multiple queries map to same page
+
+    // Let's use Google Ads conversion value for totalRevenue in summary if available, or leave it.
+    if (q.googleAds) summary.totalRevenue += q.googleAds.conversionValue;
+
+    if (q.searchConsole) summary.totalOrganicClicks += q.searchConsole.clicks;
+  }
+
+  return {
+    queries: Array.from(queryMap.values()),
+    summary
+  };
+}
+

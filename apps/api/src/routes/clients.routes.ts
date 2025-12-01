@@ -16,8 +16,11 @@ import { eq, and, desc, sql, or } from 'drizzle-orm';
 import { logger } from '@/utils/logger.js';
 import { getClientRecommendations } from '@/services/recommendation-storage.service.js';
 import { runClientSync } from '@/services/client-sync.service.js';
-import { analyzeSearchConsoleData } from '@/services/ai-analyzer.service.js';
+import { analyzeSearchConsoleData, analyzeSearchConsoleDataGrouped, runSeoSemAnalysis, constructInterplayData } from '@/services/ai-analyzer.service.js';
 import { contentFetcher } from '@/services/content-fetcher.service.js';
+import { getSearchQueryReport } from '@/services/google-ads.service.js';
+import { getSearchAnalytics } from '@/services/search-console.service.js';
+import { getGA4LandingPageMetrics } from '@/services/ga4.service.js';
 
 const router = Router();
 
@@ -565,14 +568,30 @@ router.post('/:id/search-console/analyze', async (req: Request, res: Response) =
       );
 
     // Create a map of landing pages to GA4 metrics for easy lookup
+    // GA4 returns relative paths like "/pages/contact"
+    // Search Console returns full URLs like "https://www.alldiamonds.com.au/pages/contact"
+    // So we need to extract the path from the URL to match
     const ga4MetricsMap = new Map<string, typeof ga4LandingPageData[0]>();
     ga4LandingPageData.forEach(metric => {
       ga4MetricsMap.set(metric.landingPage, metric);
     });
 
+    // Helper function to extract path from full URL
+    const extractPath = (url: string): string => {
+      try {
+        const urlObj = new URL(url);
+        return urlObj.pathname;
+      } catch {
+        // If it's not a valid URL, return as-is
+        return url;
+      }
+    };
+
     // Enrich queries with GA4 landing page data
     const enrichedQueries = queries.map(query => {
-      const ga4Data = query.page ? ga4MetricsMap.get(query.page) : undefined;
+      // Extract path from Search Console URL to match with GA4 landing page path
+      const pagePath = query.page ? extractPath(query.page) : undefined;
+      const ga4Data = pagePath ? ga4MetricsMap.get(pagePath) : undefined;
       return {
         ...query,
         ga4Engagement: ga4Data ? {
@@ -629,9 +648,9 @@ router.post('/:id/search-console/analyze', async (req: Request, res: Response) =
       }
     }
 
-    // Run AI Analysis with enriched data
-    logger.info({ queryCount: enrichedQueries.length, clientId: id }, 'Calling analyzeSearchConsoleData with GA4 enrichment');
-    const analysis = await analyzeSearchConsoleData(
+    // Run AI Analysis with enriched data (using grouped analysis)
+    logger.info({ queryCount: enrichedQueries.length, clientId: id }, 'Calling analyzeSearchConsoleDataGrouped with GA4 enrichment');
+    const analysis = await analyzeSearchConsoleDataGrouped(
       {
         queries: enrichedQueries,
         totalQueries: enrichedQueries.length,
@@ -639,29 +658,32 @@ router.post('/:id/search-console/analyze', async (req: Request, res: Response) =
           startDate: startDate.toISOString().split('T')[0],
           endDate: endDate.toISOString().split('T')[0],
         },
-        queriesByLandingPage: Array.from(queriesByPage.entries()).map(([page, pageQueries]) => ({
-          page,
-          queries: pageQueries,
-          totalImpressions: pageQueries.reduce((sum, q) => sum + q.impressions, 0),
-          totalClicks: pageQueries.reduce((sum, q) => sum + q.clicks, 0),
-          ga4Metrics: ga4MetricsMap.get(page) ? {
-            sessions: Number(ga4MetricsMap.get(page)!.sessions) || 0,
-            engagementRate: Number(ga4MetricsMap.get(page)!.engagementRate) || 0,
-            bounceRate: Number(ga4MetricsMap.get(page)!.bounceRate) || 0,
-            conversions: Number(ga4MetricsMap.get(page)!.conversions) || 0,
-            revenue: Number(ga4MetricsMap.get(page)!.totalRevenue) || 0,
-          } : undefined
-        }))
+        queriesByLandingPage: Array.from(queriesByPage.entries()).map(([page, pageQueries]) => {
+          // Extract path from the Search Console URL to match with GA4
+          const pagePath = extractPath(page);
+          const ga4PageData = ga4MetricsMap.get(pagePath);
+
+          return {
+            page,
+            queries: pageQueries,
+            totalImpressions: pageQueries.reduce((sum, q) => sum + q.impressions, 0),
+            totalClicks: pageQueries.reduce((sum, q) => sum + q.clicks, 0),
+            ga4Metrics: ga4PageData ? {
+              sessions: Number(ga4PageData.sessions) || 0,
+              engagementRate: Number(ga4PageData.engagementRate) || 0,
+              bounceRate: Number(ga4PageData.bounceRate) || 0,
+              conversions: Number(ga4PageData.conversions) || 0,
+              revenue: Number(ga4PageData.totalRevenue) || 0,
+            } : undefined
+          };
+        })
       },
-      {
-        // Optional: Fetch client context from DB if available
-        industry: undefined,
-        targetMarket: undefined
-      },
+      undefined, // clientContext
       pageAnalysisData
     );
 
     res.json(analysis);
+
 
   } catch (error) {
     logger.error({ error }, 'Failed to analyze Search Console data');
@@ -778,116 +800,107 @@ router.get('/:id/query-overlaps', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    // For now, return empty overlaps since we don't have Google Ads data yet
-    // TODO: Remove this once Google Ads API access is available
-    return res.json({
-      overlaps: [],
-      totalOverlaps: 0,
-      potentialSavings: 0,
-      message: 'Query overlaps require both Google Ads and Search Console data. Connect Google Ads to see overlaps.',
-    });
-
     // Calculate date range
     const endDate = new Date();
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    // Check if we have any overlaps first
-    const [overlapCount] = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(queryOverlaps)
-      .where(eq(queryOverlaps.clientAccountId, id));
-
-    // If no overlaps exist, return empty result early
-    if (!overlapCount || overlapCount.count === 0) {
-      return res.json({
-        overlaps: [],
-        totalOverlaps: 0,
-        potentialSavings: 0,
-      });
-    }
-
-    // Fetch overlaps with aggregated metrics
-    const overlapData = await db
-      .select({
-        overlapId: queryOverlaps.id,
-        queryId: searchQueries.id,
-        queryText: searchQueries.queryText,
-        adsSpend: sql<number>`SUM(${googleAdsQueries.costMicros}) / 1000000.0`,
-        adsClicks: sql<number>`SUM(${googleAdsQueries.clicks})`,
-        adsCpc: sql<number>`AVG(${googleAdsQueries.avgCpcMicros}) / 1000000.0`,
-        adsConversions: sql<number>`SUM(${googleAdsQueries.conversions})`,
-        scPosition: sql<number>`AVG(${searchConsoleQueries.position})`,
-        scCtr: sql<number>`AVG(${searchConsoleQueries.ctr})`,
-        scImpressions: sql<number>`SUM(${searchConsoleQueries.impressions})`,
-        scClicks: sql<number>`SUM(${searchConsoleQueries.clicks})`,
-        hasRecommendation: sql<boolean>`CASE WHEN COUNT(${recommendations.id}) > 0 THEN true ELSE false END`,
-        recommendationId: sql<string>`MAX(${recommendations.id})`,
-      })
-      .from(queryOverlaps)
-      .innerJoin(searchQueries, eq(queryOverlaps.searchQueryId, searchQueries.id))
-      .innerJoin(
-        googleAdsQueries,
-        and(
-          eq(googleAdsQueries.searchQueryId, searchQueries.id),
-          sql`${googleAdsQueries.date} >= ${startDate.toISOString().split('T')[0]}`,
-          sql`${googleAdsQueries.date} <= ${endDate.toISOString().split('T')[0]}`
-        )
-      )
-      .innerJoin(
-        searchConsoleQueries,
-        and(
-          eq(searchConsoleQueries.searchQueryId, searchQueries.id),
-          sql`${searchConsoleQueries.date} >= ${startDate.toISOString().split('T')[0]}`,
-          sql`${searchConsoleQueries.date} <= ${endDate.toISOString().split('T')[0]}`
-        )
-      )
-      .leftJoin(
-        recommendations,
-        and(
-          eq(recommendations.queryOverlapId, queryOverlaps.id),
-          eq(recommendations.status, 'pending')
-        )
-      )
-      .where(eq(queryOverlaps.clientAccountId, id))
-      .groupBy(queryOverlaps.id, searchQueries.id, searchQueries.queryText)
-      .orderBy(desc(sql`SUM(${googleAdsQueries.costMicros})`))
-      .limit(100);
-
-    const overlaps = overlapData.map((row) => ({
-      queryId: row.queryId,
-      queryText: row.queryText,
-      googleAds: {
-        spend: parseFloat(row.adsSpend?.toString() || '0'),
-        clicks: row.adsClicks || 0,
-        cpc: parseFloat(row.adsCpc?.toString() || '0'),
-        conversions: parseFloat(row.adsConversions?.toString() || '0'),
-      },
-      searchConsole: {
-        position: parseFloat(row.scPosition?.toString() || '0'),
-        ctr: parseFloat(row.scCtr?.toString() || '0'),
-        impressions: row.scImpressions || 0,
-        clicks: row.scClicks || 0,
-      },
-      hasRecommendation: row.hasRecommendation || false,
-      recommendationId: row.recommendationId || undefined,
-    }));
-
-    // Calculate potential savings (queries with good organic position < 5)
-    const potentialSavings = overlaps
-      .filter((o) => o.searchConsole.position < 5)
-      .reduce((sum, o) => sum + o.googleAds.spend, 0);
-
+    // For now, return empty overlaps since we don't have Google Ads data yet
+    // TODO: Remove this once Google Ads API access is available
     res.json({
-      overlaps,
-      totalOverlaps: overlaps.length,
-      potentialSavings,
+      overlaps: [],
+      totalOverlaps: 0,
+      dateRange: {
+        startDate: startDate.toISOString().split('T')[0],
+        endDate: endDate.toISOString().split('T')[0],
+      },
     });
   } catch (error) {
     logger.error({ error }, 'Failed to fetch query overlaps');
     res.status(500).json({ error: 'Failed to fetch query overlaps' });
   }
 });
+
+/**
+ * POST /api/clients/:id/seo-sem-analysis
+ * Run the multi-agent SEO/SEM interplay analysis
+ */
+router.post('/:id/seo-sem-analysis', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = (req as any).user;
+    const days = parseInt(req.query.days as string) || 30;
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify client exists and belongs to user's agency
+    const [client] = await db
+      .select()
+      .from(clientAccounts)
+      .where(and(eq(clientAccounts.id, id), eq(clientAccounts.agencyId, user.agencyId)))
+      .limit(1);
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Calculate date range
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    const dateRange = {
+      startDate: startDate.toISOString().split('T')[0],
+      endDate: endDate.toISOString().split('T')[0],
+    };
+
+    logger.info({ clientId: id, dateRange }, 'Starting SEO/SEM Analysis Data Fetch');
+
+    // Fetch raw data in parallel
+    const [googleAdsData, searchConsoleData, ga4Data] = await Promise.all([
+      getSearchQueryReport(id, dateRange.startDate, dateRange.endDate).catch(err => {
+        logger.error({ err }, 'Failed to fetch Google Ads data for analysis');
+        return [];
+      }),
+      getSearchAnalytics(id, dateRange.startDate, dateRange.endDate).catch(err => {
+        logger.error({ err }, 'Failed to fetch Search Console data for analysis');
+        return [];
+      }),
+      getGA4LandingPageMetrics(id, dateRange.startDate, dateRange.endDate).catch(err => {
+        logger.error({ err }, 'Failed to fetch GA4 data for analysis');
+        return [];
+      })
+    ]);
+
+    logger.info({
+      clientId: id,
+      adsCount: googleAdsData.length,
+      scCount: searchConsoleData.length,
+      ga4Count: ga4Data.length
+    }, 'Data fetch complete. Constructing Interplay Data.');
+
+    // Construct Interplay Data
+    const interplayData = constructInterplayData(googleAdsData, searchConsoleData, ga4Data);
+
+    // Prepare Context
+    const context = {
+      clientId: id,
+      clientName: client.name,
+      competitors: [] // TODO: Add competitors from DB if available
+    };
+
+    // Run Analysis
+    const analysis = await runSeoSemAnalysis(interplayData, context, dateRange);
+
+    res.json(analysis);
+
+  } catch (error) {
+    logger.error({ error }, 'Failed to run SEO/SEM analysis');
+    res.status(500).json({ error: 'Failed to run SEO/SEM analysis' });
+  }
+});
+
 
 /**
  * GET /api/clients/:id/recommendations
@@ -1040,7 +1053,7 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
       .where(and(
         eq(syncJobs.clientAccountId, id),
         eq(syncJobs.status, 'pending'),
-        sql`${syncJobs.startedAt} < ${fiveMinutesAgo}`
+        sql`${syncJobs.createdAt} < ${fiveMinutesAgo}`
       ));
 
     // Try to insert new sync job (status 'pending')
@@ -1053,7 +1066,7 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
           clientAccountId: id,
           jobType: 'full_sync',
           status: 'pending',
-          startedAt: new Date(),
+          // Don't set startedAt for pending jobs - it will be set when status changes to 'running'
         })
         .returning();
     } catch (error: any) {

@@ -1,6 +1,6 @@
 import { GA4LandingPageMetric } from '@/hooks/useClientDetail';
 import { ArrowUpDown, ChevronDown, ChevronRight } from 'lucide-react';
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 
 interface GA4LandingPageTableProps {
     pages: GA4LandingPageMetric[];
@@ -109,9 +109,8 @@ export function GA4LandingPageTable({ pages }: GA4LandingPageTableProps) {
                         </tr>
                     ) : (
                         sortedPages.map((page, index) => (
-                            <>
+                            <Fragment key={`${page.landingPage}-${index}`}>
                                 <tr
-                                    key={`${page.landingPage}-${index}`}
                                     className="border-b hover:bg-slate-50 cursor-pointer"
                                     onClick={() => toggleRow(index)}
                                 >
@@ -185,7 +184,7 @@ export function GA4LandingPageTable({ pages }: GA4LandingPageTableProps) {
                                         </td>
                                     </tr>
                                 )}
-                            </>
+                            </Fragment>
                         ))
                     )}
                 </tbody>

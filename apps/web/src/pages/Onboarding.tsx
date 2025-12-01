@@ -6,9 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { CheckCircle2, Circle, Loader2, LayoutDashboard, Globe } from 'lucide-react';
 
-type OnboardingStep = 'create-client' | 'connect-google-ads' | 'connect-search-console' | 'connect-ga4' | 'complete';
+type OnboardingStep = 'create-client' | 'select-mode' | 'connect-google-ads' | 'connect-search-console' | 'connect-ga4' | 'complete';
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -23,6 +23,7 @@ export default function Onboarding() {
   const [googleAdsConnected, setGoogleAdsConnected] = useState(false);
   const [searchConsoleConnected, setSearchConsoleConnected] = useState(false);
   const [ga4Connected, setGa4Connected] = useState(false);
+  const [onboardingMode, setOnboardingMode] = useState<'unified' | 'split' | null>(null);
 
   // Check for OAuth callback parameters
   useEffect(() => {
@@ -40,16 +41,28 @@ export default function Onboarding() {
       setClientId(clientIdParam);
     }
 
-    if (stepParam === 'complete' && serviceParam) {
-      if (serviceParam === 'ads') {
-        setGoogleAdsConnected(true);
-        setCurrentStep('connect-search-console');
-      } else if (serviceParam === 'search_console') {
-        setSearchConsoleConnected(true);
-        setCurrentStep('connect-ga4');
-      } else if (serviceParam === 'ga4') {
-        setGa4Connected(true);
+    if (stepParam === 'complete') {
+      // Handle multiple services from unified flow
+      const servicesParam = searchParams.get('services');
+      if (servicesParam) {
+        const services = servicesParam.split(',');
+        if (services.includes('ads')) setGoogleAdsConnected(true);
+        if (services.includes('search_console')) setSearchConsoleConnected(true);
+        if (services.includes('ga4')) setGa4Connected(true);
         setCurrentStep('complete');
+      }
+      // Handle single service from split flow (backward compatibility)
+      else if (serviceParam) {
+        if (serviceParam === 'ads') {
+          setGoogleAdsConnected(true);
+          setCurrentStep('connect-search-console');
+        } else if (serviceParam === 'search_console') {
+          setSearchConsoleConnected(true);
+          setCurrentStep('connect-ga4');
+        } else if (serviceParam === 'ga4') {
+          setGa4Connected(true);
+          setCurrentStep('complete');
+        }
       }
     }
   }, [searchParams, clientId]);
@@ -65,11 +78,34 @@ export default function Onboarding() {
       });
 
       setClientId(response.data.id);
-      setCurrentStep('connect-google-ads');
+      setCurrentStep('select-mode');
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to create client');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSelectMode = async (mode: 'unified' | 'split') => {
+    setOnboardingMode(mode);
+    if (mode === 'split') {
+      setCurrentStep('connect-google-ads');
+    } else {
+      // Unified flow
+      if (!clientId) return;
+      setLoading(true);
+      try {
+        const response = await api.get('/api/google/auth/initiate', {
+          params: {
+            clientId,
+            service: 'all',
+          },
+        });
+        window.location.href = response.data.authUrl;
+      } catch (err: any) {
+        setError(err.response?.data?.error || 'Failed to initiate unified connection');
+        setLoading(false);
+      }
     }
   };
 
@@ -152,9 +188,15 @@ export default function Onboarding() {
 
   const steps = [
     { key: 'create-client', label: 'Create Client', completed: !!clientId },
-    { key: 'connect-google-ads', label: 'Connect Google Ads', completed: googleAdsConnected },
-    { key: 'connect-search-console', label: 'Connect Search Console', completed: searchConsoleConnected },
-    { key: 'connect-ga4', label: 'Connect GA4', completed: ga4Connected },
+    { key: 'select-mode', label: 'Select Mode', completed: !!onboardingMode },
+    ...(onboardingMode === 'unified'
+      ? [{ key: 'connect-unified', label: 'Connect Accounts', completed: currentStep === 'complete' }]
+      : [
+        { key: 'connect-google-ads', label: 'Connect Google Ads', completed: googleAdsConnected },
+        { key: 'connect-search-console', label: 'Connect Search Console', completed: searchConsoleConnected },
+        { key: 'connect-ga4', label: 'Connect GA4', completed: ga4Connected },
+      ]
+    ),
     { key: 'complete', label: 'Complete', completed: currentStep === 'complete' },
   ];
 
@@ -231,6 +273,46 @@ export default function Onboarding() {
                     )}
                   </Button>
                 </form>
+              </CardContent>
+            </>
+          )}
+
+          {currentStep === 'select-mode' && (
+            <>
+              <CardHeader>
+                <CardTitle>Select Connection Mode</CardTitle>
+                <CardDescription>
+                  Choose how you want to connect your Google accounts
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid md:grid-cols-2 gap-4">
+                  <button
+                    onClick={() => handleSelectMode('unified')}
+                    className="flex flex-col items-start p-6 border-2 border-slate-200 rounded-lg hover:border-blue-600 hover:bg-blue-50 transition-all text-left"
+                  >
+                    <div className="p-3 bg-blue-100 rounded-full mb-4">
+                      <LayoutDashboard className="w-6 h-6 text-blue-600" />
+                    </div>
+                    <h3 className="font-semibold text-lg mb-2">Single Google Account</h3>
+                    <p className="text-sm text-slate-600">
+                      I use one Google account (e.g. analytics@agency.com) to access Google Ads, Search Console, and GA4.
+                    </p>
+                  </button>
+
+                  <button
+                    onClick={() => handleSelectMode('split')}
+                    className="flex flex-col items-start p-6 border-2 border-slate-200 rounded-lg hover:border-blue-600 hover:bg-blue-50 transition-all text-left"
+                  >
+                    <div className="p-3 bg-purple-100 rounded-full mb-4">
+                      <Globe className="w-6 h-6 text-purple-600" />
+                    </div>
+                    <h3 className="font-semibold text-lg mb-2">Multiple Google Accounts</h3>
+                    <p className="text-sm text-slate-600">
+                      I need to use different Google accounts for each service.
+                    </p>
+                  </button>
+                </div>
               </CardContent>
             </>
           )}

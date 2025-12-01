@@ -21,12 +21,12 @@ const GA4_SCOPES = ['https://www.googleapis.com/auth/analytics.readonly'];
 // Validation schemas
 const initiateSchema = z.object({
   clientId: z.string().uuid(),
-  service: z.enum(['ads', 'search_console', 'ga4']),
+  service: z.enum(['ads', 'search_console', 'ga4', 'all']),
 });
 
 const disconnectSchema = z.object({
   clientId: z.string().uuid(),
-  service: z.enum(['ads', 'search_console', 'ga4']),
+  service: z.enum(['ads', 'search_console', 'ga4', 'all']),
 });
 
 const connectSchema = z.object({
@@ -34,6 +34,14 @@ const connectSchema = z.object({
   service: z.enum(['ads', 'search_console', 'ga4']),
   session: z.string(),
   selectedAccountId: z.string().min(1, 'Account ID or site URL is required'),
+});
+
+const connectUnifiedSchema = z.object({
+  clientId: z.string().uuid(),
+  session: z.string(),
+  googleAdsId: z.string().optional(),
+  searchConsoleUrl: z.string().optional(),
+  ga4PropertyId: z.string().optional(),
 });
 
 // Create OAuth2 client
@@ -74,6 +82,7 @@ router.get('/auth/initiate', async (req: Request, res: Response) => {
     if (service === 'ads') scopes = GOOGLE_ADS_SCOPES;
     else if (service === 'search_console') scopes = SEARCH_CONSOLE_SCOPES;
     else if (service === 'ga4') scopes = GA4_SCOPES;
+    else if (service === 'all') scopes = [...GOOGLE_ADS_SCOPES, ...SEARCH_CONSOLE_SCOPES, ...GA4_SCOPES];
 
     // Create OAuth2 client
     const oauth2Client = getOAuth2Client();
@@ -124,7 +133,7 @@ router.get('/callback', async (req: Request, res: Response) => {
     }
 
     // Decode state parameter
-    let stateData: { clientId: string; service: 'ads' | 'search_console' | 'ga4' };
+    let stateData: { clientId: string; service: 'ads' | 'search_console' | 'ga4' | 'all' };
     try {
       stateData = JSON.parse(Buffer.from(String(state), 'base64').toString('utf-8'));
     } catch (err) {
@@ -176,7 +185,7 @@ router.get('/callback', async (req: Request, res: Response) => {
     const sessionToken = tempOAuthStore.generateSessionToken();
     tempOAuthStore.storeSession(sessionToken, {
       clientId,
-      service: service as 'ads' | 'search_console' | 'ga4',
+      service: service as 'ads' | 'search_console' | 'ga4' | 'all',
       refreshToken: tokens.refresh_token,
       accessToken: tokens.access_token || undefined,
     });
@@ -184,6 +193,12 @@ router.get('/callback', async (req: Request, res: Response) => {
     logger.info({ clientId, service, sessionToken: sessionToken.substring(0, 8) + '...' }, 'Redirecting to account selection');
 
     // Redirect to account selection page
+    if (service === 'all') {
+      return res.redirect(
+        `${config.frontendUrl}/onboarding/select-unified?session=${sessionToken}&clientId=${clientId}`
+      );
+    }
+
     return res.redirect(
       `${config.frontendUrl}/onboarding/select-account?session=${sessionToken}&clientId=${clientId}&service=${service}`
     );
@@ -233,6 +248,11 @@ router.get('/accounts/:clientId', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Session does not match client' });
     }
 
+    // Verify session is for ads or all
+    if (oauthSession.service !== 'ads' && oauthSession.service !== 'all') {
+      return res.status(400).json({ error: 'Invalid session type for Google Ads' });
+    }
+
     let accounts = [];
 
     if (config.useMockGoogleApis) {
@@ -241,60 +261,85 @@ router.get('/accounts/:clientId', async (req: Request, res: Response) => {
       accounts = await listAccessibleAccountsMock();
     } else {
       // Real Google Ads API mode
-      const googleAdsClient = new GoogleAdsApi({
-        client_id: config.googleClientId!,
-        client_secret: config.googleClientSecret!,
-        developer_token: config.googleAdsDeveloperToken!,
-      });
+      try {
+        logger.info('Attempting to fetch Google Ads accounts');
 
-      // Fetch accessible customers
-      const accessibleCustomers = await googleAdsClient.listAccessibleCustomers(oauthSession.refreshToken);
+        const googleAdsClient = new GoogleAdsApi({
+          client_id: config.googleClientId!,
+          client_secret: config.googleClientSecret!,
+          developer_token: config.googleAdsDeveloperToken!,
+        });
 
-      const customerIds = accessibleCustomers.resource_names?.map((name: string) => {
-        return name.replace('customers/', '');
-      }) || [];
+        // Fetch accessible customers
+        const accessibleCustomers = await googleAdsClient.listAccessibleCustomers(oauthSession.refreshToken);
 
-      // Fetch account details for each customer
-      for (const customerId of customerIds) {
-        try {
-          const customer = googleAdsClient.Customer({
-            customer_id: customerId,
-            refresh_token: oauthSession.refreshToken,
-          });
+        const customerIds = accessibleCustomers.resource_names?.map((name: string) => {
+          return name.replace('customers/', '');
+        }) || [];
 
-          const accountInfo = await customer.query(`
-            SELECT
-              customer.id,
-              customer.descriptive_name,
-              customer.currency_code,
-              customer.manager
-            FROM customer
-            WHERE customer.id = ${customerId}
-            LIMIT 1
-          `);
+        // Fetch account details for each customer
+        for (const customerId of customerIds) {
+          try {
+            const customer = googleAdsClient.Customer({
+              customer_id: customerId,
+              refresh_token: oauthSession.refreshToken,
+            });
 
-          if (accountInfo && accountInfo.length > 0) {
-            const account = accountInfo[0];
-            if (account.customer) {
-              accounts.push({
-                customerId: String(account.customer.id),
-                name: account.customer.descriptive_name || `Account ${customerId}`,
-                isManager: account.customer.manager || false,
-                currency: account.customer.currency_code || 'USD',
-              });
+            const accountInfo = await customer.query(`
+              SELECT
+                customer.id,
+                customer.descriptive_name,
+                customer.currency_code,
+                customer.manager
+              FROM customer
+              WHERE customer.id = ${customerId}
+              LIMIT 1
+            `);
+
+            if (accountInfo && accountInfo.length > 0) {
+              const account = accountInfo[0];
+              if (account.customer) {
+                accounts.push({
+                  customerId: String(account.customer.id),
+                  name: account.customer.descriptive_name || `Account ${customerId}`,
+                  isManager: account.customer.manager || false,
+                  currency: account.customer.currency_code || 'USD',
+                });
+              }
             }
+          } catch (error) {
+            // Log but continue - some accounts may be inaccessible
+            logger.warn({ clientId, customerId, error }, 'Failed to fetch account details');
           }
-        } catch (error) {
-          // Log but continue - some accounts may be inaccessible
-          logger.warn({ clientId, customerId, error }, 'Failed to fetch account details');
         }
+      } catch (error: any) {
+        // Google Ads API access not available - log warning and return empty array
+        logger.warn({
+          clientId,
+          error: error.message,
+          code: error.code
+        }, 'Google Ads API not accessible - continuing without Google Ads accounts');
+        accounts = [];
       }
     }
 
     res.json({ accounts });
-  } catch (error) {
-    logger.error({ error, clientId: req.params.clientId }, 'Error fetching Google Ads accounts');
-    res.status(500).json({ error: 'Failed to fetch Google Ads accounts' });
+  } catch (error: any) {
+    console.error('Detailed error in GET /accounts:', error);
+    logger.error({
+      error: {
+        message: error.message,
+        stack: error.stack,
+        response: error.response?.data,
+        code: error.code
+      },
+      clientId: req.params.clientId
+    }, 'Error fetching Google Ads accounts');
+    res.status(500).json({
+      error: 'Failed to fetch Google Ads accounts',
+      details: error.message,
+      code: error.code
+    });
   }
 });
 
@@ -323,6 +368,14 @@ router.get('/properties/:clientId', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Session expired or invalid' });
     }
 
+    if (oauthSession.clientId !== clientId) {
+      return res.status(400).json({ error: 'Session does not match client' });
+    }
+
+    if (oauthSession.service !== 'search_console' && oauthSession.service !== 'all') {
+      return res.status(400).json({ error: 'Invalid session type for Search Console' });
+    }
+
     let properties = [];
 
     if (config.useMockGoogleApis) {
@@ -336,9 +389,21 @@ router.get('/properties/:clientId', async (req: Request, res: Response) => {
     }
 
     res.json({ properties });
-  } catch (error) {
-    logger.error({ error, clientId: req.params.clientId }, 'Error fetching Search Console properties');
-    res.status(500).json({ error: 'Failed to fetch Search Console properties' });
+  } catch (error: any) {
+    logger.error({
+      error: {
+        message: error.message,
+        stack: error.stack,
+        response: error.response?.data,
+        code: error.code
+      },
+      clientId: req.params.clientId
+    }, 'Error fetching Search Console properties');
+    res.status(500).json({
+      error: 'Failed to fetch Search Console properties',
+      details: error.message,
+      code: error.code
+    });
   }
 });
 
@@ -366,6 +431,14 @@ router.get('/ga4-properties/:clientId', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Session expired or invalid' });
     }
 
+    if (oauthSession.clientId !== clientId) {
+      return res.status(400).json({ error: 'Session does not match client' });
+    }
+
+    if (oauthSession.service !== 'ga4' && oauthSession.service !== 'all') {
+      return res.status(400).json({ error: 'Invalid session type for GA4' });
+    }
+
     let properties = [];
 
     if (config.useMockGoogleApis) {
@@ -383,9 +456,21 @@ router.get('/ga4-properties/:clientId', async (req: Request, res: Response) => {
     }
 
     res.json({ properties });
-  } catch (error) {
-    logger.error({ error, clientId: req.params.clientId }, 'Error fetching GA4 properties');
-    res.status(500).json({ error: 'Failed to fetch GA4 properties' });
+  } catch (error: any) {
+    logger.error({
+      error: {
+        message: error.message,
+        stack: error.stack,
+        response: error.response?.data,
+        code: error.code
+      },
+      clientId: req.params.clientId
+    }, 'Error fetching GA4 properties');
+    res.status(500).json({
+      error: 'Failed to fetch GA4 properties',
+      details: error.message,
+      code: error.code
+    });
   }
 });
 
@@ -477,39 +562,12 @@ router.post('/connect', async (req: Request, res: Response) => {
 
       logger.info({ clientId }, 'GA4 connected');
 
-      // Trigger initial GA4 sync
+      // Trigger initial sync (background)
       (async () => {
         try {
-          const endDate = new Date().toISOString().split('T')[0];
-          const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-            .toISOString()
-            .split('T')[0];
-
-          let ga4Data: any[] = [];
-          if (config.useMockGoogleApis) {
-            // Mock data
-            ga4Data = [];
-          } else {
-            const { getGA4Analytics } = await import('@/services/ga4.service.js');
-            ga4Data = await getGA4Analytics(clientId, startDate, endDate);
-          }
-
-          // Insert GA4 data
-          for (const row of ga4Data) {
-            await db.insert(ga4Metrics).values({
-              clientAccountId: clientId,
-              date: row.date,
-              sessions: row.sessions,
-              engagementRate: row.engagementRate.toString(),
-              viewsPerSession: row.viewsPerSession.toString(),
-              conversions: row.conversions.toString(),
-              totalRevenue: row.totalRevenue.toString(),
-              averageSessionDuration: row.averageSessionDuration.toString(),
-              bounceRate: row.bounceRate.toString(),
-            }).onConflictDoNothing();
-          }
-
-          logger.info({ clientId, recordCount: ga4Data.length }, 'Initial GA4 sync completed');
+          const { runClientSync } = await import('@/services/client-sync.service.js');
+          await runClientSync(clientId, 'manual');
+          logger.info({ clientId }, 'Initial GA4 sync completed');
         } catch (error) {
           logger.error({ error, clientId }, 'Initial GA4 sync failed');
         }
@@ -582,6 +640,99 @@ router.post('/disconnect', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, 'Error disconnecting');
     res.status(500).json({ error: 'Failed to disconnect' });
+  }
+});
+
+/**
+ * POST /api/google/connect-unified
+ * Connects all selected accounts using a single OAuth session
+ */
+router.post('/connect-unified', async (req: Request, res: Response) => {
+  try {
+    const { clientId, session, googleAdsId, searchConsoleUrl, ga4PropertyId } = connectUnifiedSchema.parse(req.body);
+    const userId = req.auth?.userId;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const oauthSession = tempOAuthStore.getSession(session);
+
+    if (!oauthSession) {
+      return res.status(400).json({ error: 'Session expired or invalid' });
+    }
+
+    if (oauthSession.clientId !== clientId) {
+      return res.status(400).json({ error: 'Session does not match client' });
+    }
+
+    if (oauthSession.service !== 'all') {
+      return res.status(400).json({ error: 'Invalid session type for unified connection' });
+    }
+
+    // Encrypt refresh token
+    const { encrypted, keyVersion } = await encryptToken(oauthSession.refreshToken);
+
+    // Prepare update object
+    const updateData: any = {
+      updatedAt: new Date(),
+    };
+
+    if (googleAdsId) {
+      updateData.googleAdsRefreshTokenEncrypted = encrypted;
+      updateData.googleAdsRefreshTokenKeyVersion = keyVersion;
+      updateData.googleAdsCustomerId = googleAdsId;
+    }
+
+    if (searchConsoleUrl) {
+      updateData.searchConsoleRefreshTokenEncrypted = encrypted;
+      updateData.searchConsoleRefreshTokenKeyVersion = keyVersion;
+      updateData.searchConsoleSiteUrl = searchConsoleUrl;
+    }
+
+    if (ga4PropertyId) {
+      updateData.ga4RefreshTokenEncrypted = encrypted;
+      updateData.ga4RefreshTokenKeyVersion = keyVersion;
+      updateData.ga4PropertyId = ga4PropertyId;
+    }
+
+    // Update database
+    await db
+      .update(clientAccounts)
+      .set(updateData)
+      .where(eq(clientAccounts.id, clientId));
+
+    logger.info({ clientId }, 'Unified Google accounts connected');
+
+    // Trigger initial syncs (background)
+    (async () => {
+      try {
+        // Only trigger sync if at least one service was connected
+        if (googleAdsId || searchConsoleUrl || ga4PropertyId) {
+          const { runClientSync } = await import('@/services/client-sync.service.js');
+          await runClientSync(clientId, 'manual');
+          logger.info({ clientId }, 'Initial unified sync completed');
+        } else {
+          logger.info({ clientId }, 'No services connected, skipping sync');
+        }
+      } catch (error) {
+        logger.error({ error, clientId }, 'Initial unified sync failed');
+      }
+    })();
+
+    // Delete temporary session
+    tempOAuthStore.deleteSession(session);
+
+    res.json({
+      success: true,
+      message: 'Accounts connected successfully',
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Invalid request parameters', details: error.errors });
+    }
+    logger.error({ error }, 'Error connecting unified accounts');
+    res.status(500).json({ error: 'Failed to connect accounts' });
   }
 });
 

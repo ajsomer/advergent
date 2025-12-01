@@ -107,8 +107,15 @@ export async function listGA4Properties(refreshToken: string, accessToken?: stri
 
         const analyticsAdmin = google.analyticsadmin({ version: 'v1beta', auth: oauth2Client });
 
+        logger.info('Making request to Google Analytics Admin API...');
+
         // List account summaries to find accessible properties
         const response = await analyticsAdmin.accountSummaries.list();
+
+        logger.info({
+            hasAccountSummaries: !!response.data.accountSummaries,
+            accountCount: response.data.accountSummaries?.length || 0
+        }, 'Received response from Google Analytics Admin API');
 
         const properties: GA4Property[] = [];
 
@@ -127,9 +134,18 @@ export async function listGA4Properties(refreshToken: string, accessToken?: stri
             }
         }
 
+        logger.info({ propertyCount: properties.length }, 'Successfully retrieved GA4 properties');
         return properties;
-    } catch (error) {
-        logger.error({ error }, 'Failed to list GA4 properties');
+    } catch (error: any) {
+        logger.error({
+            error: {
+                message: error.message,
+                stack: error.stack,
+                response: error.response?.data,
+                code: error.code,
+                details: error.errors
+            }
+        }, 'Failed to list GA4 properties');
         throw error;
     }
 }
@@ -226,7 +242,7 @@ export async function getGA4LandingPageMetrics(
                 dateRanges: [{ startDate, endDate }],
                 dimensions: [
                     { name: 'date' },
-                    { name: 'landingPagePath' },
+                    { name: 'landingPage' },
                     { name: 'sessionSource' },
                     { name: 'sessionMedium' }
                 ],
