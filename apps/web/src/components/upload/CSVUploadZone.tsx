@@ -4,7 +4,7 @@ import { FileSpreadsheet, CheckCircle, AlertCircle, Loader2, X, Upload } from 'l
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useApiClient } from '@/lib/api';
+import { useApiClient, useAuthReady, AuthenticationError } from '@/lib/api';
 
 interface UploadResult {
   sessionId: string;
@@ -33,6 +33,7 @@ interface CSVUploadZoneProps {
 
 export function CSVUploadZone({ clientId, onUploadComplete }: CSVUploadZoneProps) {
   const apiClient = useApiClient();
+  const { isReady: isAuthReady } = useAuthReady();
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [result, setResult] = useState<UploadResult | null>(null);
@@ -40,6 +41,12 @@ export function CSVUploadZone({ clientId, onUploadComplete }: CSVUploadZoneProps
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
+
+    // Check if authentication is ready before attempting upload
+    if (!isAuthReady) {
+      setError('Authentication is still loading. Please wait a moment and try again.');
+      return;
+    }
 
     setIsUploading(true);
     setUploadProgress(0);
@@ -69,19 +76,33 @@ export function CSVUploadZone({ clientId, onUploadComplete }: CSVUploadZoneProps
       setResult(response.data);
       onUploadComplete?.(response.data);
     } catch (err: unknown) {
-      const errorMessage = err instanceof Error
-        ? err.message
-        : (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Upload failed';
-      setError(errorMessage);
+      // Handle specific error types
+      if (err instanceof AuthenticationError) {
+        setError('Authentication failed. Please refresh the page and try again.');
+      } else {
+        const axiosError = err as { response?: { status?: number; data?: { error?: string } } };
+        const status = axiosError.response?.status;
+
+        if (status === 401) {
+          setError('Session expired or not authenticated. Please refresh the page to re-authenticate.');
+        } else if (status === 403) {
+          setError('You do not have permission to upload files for this client.');
+        } else if (status === 404) {
+          setError('Client not found. Please check the client ID and try again.');
+        } else {
+          const serverMessage = axiosError.response?.data?.error;
+          setError(serverMessage || 'Upload failed. Please try again.');
+        }
+      }
     } finally {
       setIsUploading(false);
     }
-  }, [clientId, onUploadComplete, apiClient]);
+  }, [clientId, onUploadComplete, apiClient, isAuthReady]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { 'text/csv': ['.csv'] },
-    disabled: isUploading,
+    disabled: isUploading || !isAuthReady,
   });
 
   const resetUpload = () => {
@@ -190,12 +211,18 @@ export function CSVUploadZone({ clientId, onUploadComplete }: CSVUploadZoneProps
             border-2 border-dashed rounded-lg p-8 text-center cursor-pointer
             transition-colors duration-200
             ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-slate-400'}
-            ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}
+            ${isUploading || !isAuthReady ? 'opacity-50 cursor-not-allowed' : ''}
           `}
         >
           <input {...getInputProps()} />
 
-          {isUploading ? (
+          {!isAuthReady ? (
+            <div className="space-y-4">
+              <Loader2 className="h-12 w-12 mx-auto text-slate-400 animate-spin" />
+              <p className="font-medium text-slate-500">Initializing...</p>
+              <p className="text-sm text-slate-400">Please wait while we set up your session</p>
+            </div>
+          ) : isUploading ? (
             <div className="space-y-4">
               <Loader2 className="h-12 w-12 mx-auto text-blue-500 animate-spin" />
               <p className="font-medium text-slate-700">Uploading...</p>

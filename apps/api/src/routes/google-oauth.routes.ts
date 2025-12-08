@@ -113,8 +113,9 @@ router.get('/auth/initiate', async (req: Request, res: Response) => {
 /**
  * GET /api/google/callback
  * Handles OAuth callback from Google
+ * Exported separately so it can be mounted before clerkMiddleware in server.ts
  */
-router.get('/callback', async (req: Request, res: Response) => {
+export async function handleGoogleOAuthCallback(req: Request, res: Response) {
   try {
     const { code, state, error } = req.query;
 
@@ -213,7 +214,7 @@ router.get('/callback', async (req: Request, res: Response) => {
       `${config.frontendUrl}/onboarding?error=${encodeURIComponent('OAuth callback failed')}`
     );
   }
-});
+}
 
 /**
  * GET /api/google/accounts/:clientId

@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Download, FileSpreadsheet } from 'lucide-react';
+import { Download, FileSpreadsheet, Loader2 } from 'lucide-react';
+import { generateInterplayReportPDF, downloadBlob, formatPDFFilename } from '@/lib/generatePDF';
 import type { InterplayReportResponse } from '@advergent/shared';
 
 interface ExportActionsProps {
@@ -8,9 +10,24 @@ interface ExportActionsProps {
 }
 
 export function ExportActions({ report, clientName }: ExportActionsProps) {
-  // PDF generation will be implemented in Phase 2
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+
   const handleDownloadPDF = async () => {
-    console.log('PDF download - to be implemented in Phase 2', { report, clientName });
+    setIsGeneratingPDF(true);
+    try {
+      const blob = await generateInterplayReportPDF({
+        clientName,
+        report,
+      });
+
+      const filename = formatPDFFilename(clientName);
+      downloadBlob(blob, filename);
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      // TODO: Show toast notification for error
+    } finally {
+      setIsGeneratingPDF(false);
+    }
   };
 
   // CSV export will be implemented in Phase 3
@@ -20,9 +37,22 @@ export function ExportActions({ report, clientName }: ExportActionsProps) {
 
   return (
     <div className="flex gap-3">
-      <Button onClick={handleDownloadPDF} className="gap-2">
-        <Download className="h-4 w-4" />
-        Download PDF
+      <Button
+        onClick={handleDownloadPDF}
+        disabled={isGeneratingPDF}
+        className="gap-2"
+      >
+        {isGeneratingPDF ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Generating PDF...
+          </>
+        ) : (
+          <>
+            <Download className="h-4 w-4" />
+            Download PDF
+          </>
+        )}
       </Button>
       <Button variant="outline" onClick={handleExportCSV} className="gap-2">
         <FileSpreadsheet className="h-4 w-4" />

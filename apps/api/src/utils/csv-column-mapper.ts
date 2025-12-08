@@ -106,10 +106,20 @@ export const TIME_SERIES_COLUMNS: ColumnMapping = {
 // ============================================================================
 
 /**
- * Normalize a CSV header to our internal field name
+ * Normalize a CSV header to our internal field name.
+ * This function must be idempotent because PapaParse may call transformHeader
+ * multiple times on the same header value.
  */
 export function normalizeColumnName(header: string, mapping: ColumnMapping): string {
   const trimmed = header.trim();
+
+  // Check if header is already a mapping target (idempotency check)
+  // This handles the case where PapaParse calls transformHeader twice
+  const mappingTargets = new Set(Object.values(mapping));
+  if (mappingTargets.has(trimmed)) {
+    return trimmed;
+  }
+
   return mapping[trimmed] || trimmed.toLowerCase().replace(/\s+/g, '_');
 }
 

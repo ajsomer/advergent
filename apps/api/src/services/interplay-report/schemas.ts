@@ -26,7 +26,7 @@ export const semActionSchema = z.object({
 });
 
 export const semAgentOutputSchema = z.object({
-  semActions: z.array(semActionSchema).min(1).max(15),
+  semActions: z.array(semActionSchema).max(15),
 });
 
 // ============================================================================
@@ -36,13 +36,13 @@ export const semAgentOutputSchema = z.object({
 export const seoActionSchema = z.object({
   condition: z.string().min(5),
   recommendation: z.string().min(5),
-  specificActions: z.array(z.string().min(5)).min(1).max(5),
+  specificActions: z.array(z.string().min(5)).max(5),
   impact: impactLevelSchema,
   url: z.string().optional(),
 });
 
 export const seoAgentOutputSchema = z.object({
-  seoActions: z.array(seoActionSchema).min(1).max(15),
+  seoActions: z.array(seoActionSchema).max(15),
 });
 
 // ============================================================================
@@ -55,17 +55,17 @@ export const unifiedRecommendationSchema = z.object({
   type: z.enum(['sem', 'seo', 'hybrid']),
   impact: impactLevelSchema,
   effort: effortLevelSchema,
-  actionItems: z.array(z.string().min(5)).min(1).max(5),
+  actionItems: z.array(z.string().min(5)).max(5),
 });
 
 export const executiveSummarySchema = z.object({
   summary: z.string().min(20).max(1000),
-  keyHighlights: z.array(z.string().min(5)).min(1).max(5),
+  keyHighlights: z.array(z.string().min(5)).max(5),
 });
 
 export const directorOutputSchema = z.object({
   executiveSummary: executiveSummarySchema,
-  unifiedRecommendations: z.array(unifiedRecommendationSchema).min(1).max(10),
+  unifiedRecommendations: z.array(unifiedRecommendationSchema).max(10),
 });
 
 // Export types inferred from schemas

@@ -9,6 +9,7 @@ import Onboarding from '@/pages/Onboarding';
 import SelectAccount from '@/pages/SelectAccount';
 import UnifiedAccountSelection from '@/pages/UnifiedAccountSelection';
 import ClientDetail from '@/pages/ClientDetail';
+import ClientPreparing from '@/pages/ClientPreparing';
 import Recommendations from '@/pages/Recommendations';
 import Competitors from '@/pages/Competitors';
 
@@ -73,6 +74,21 @@ function App() {
                 <>
                   <SignedIn>
                     <UnifiedAccountSelection />
+                  </SignedIn>
+                  <SignedOut>
+                    <Navigate to="/sign-in" replace />
+                  </SignedOut>
+                </>
+              }
+            />
+            <Route
+              path="/clients/:clientId/preparing"
+              element={
+                <>
+                  <SignedIn>
+                    <Layout>
+                      <ClientPreparing />
+                    </Layout>
                   </SignedIn>
                   <SignedOut>
                     <Navigate to="/sign-in" replace />

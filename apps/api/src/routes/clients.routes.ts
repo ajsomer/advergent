@@ -11,8 +11,9 @@ import {
   syncJobs,
   ga4Metrics,
   ga4LandingPageMetrics,
+  interplayReports,
 } from '@/db/schema.js';
-import { eq, and, desc, sql, or } from 'drizzle-orm';
+import { eq, and, desc, sql, or, gte } from 'drizzle-orm';
 import { logger } from '@/utils/logger.js';
 import { getClientRecommendations } from '@/services/recommendation-storage.service.js';
 import { runClientSync } from '@/services/client-sync.service.js';
@@ -1143,6 +1144,134 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error({ error }, 'Failed to initiate manual sync');
     res.status(500).json({ error: 'Failed to initiate data sync' });
+  }
+});
+
+/**
+ * GET /api/clients/:id/sync-status
+ * Get the status of the most recent sync job and report for a client
+ * Enhanced to support post-onboarding loading state
+ */
+router.get('/:id/sync-status', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const user = (req as any).user;
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    // Verify client exists and belongs to user's agency
+    const [client] = await db
+      .select()
+      .from(clientAccounts)
+      .where(and(eq(clientAccounts.id, id), eq(clientAccounts.agencyId, user.agencyId)))
+      .limit(1);
+
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    // Get the most recent sync job
+    const [latestSync] = await db
+      .select({
+        id: syncJobs.id,
+        status: syncJobs.status,
+        jobType: syncJobs.jobType,
+        createdAt: syncJobs.createdAt,
+        startedAt: syncJobs.startedAt,
+        completedAt: syncJobs.completedAt,
+        errorMessage: syncJobs.errorMessage,
+      })
+      .from(syncJobs)
+      .where(eq(syncJobs.clientAccountId, id))
+      .orderBy(desc(syncJobs.createdAt))
+      .limit(1);
+
+    if (!latestSync) {
+      return res.json({
+        sync: {
+          status: 'never_synced',
+          jobId: null,
+          startedAt: null,
+          completedAt: null,
+          errorMessage: null,
+        },
+        report: null,
+        isReady: false,
+        syncStartedAt: null,
+      });
+    }
+
+    // Get latest report created after this sync started (if sync is running or completed)
+    let reportInfo: {
+      status: 'none' | 'pending' | 'researching' | 'analyzing' | 'completed' | 'failed';
+      reportId: string | null;
+      createdAt: string | null;
+      completedAt: string | null;
+      errorMessage: string | null;
+    } | null = null;
+
+    if (latestSync.status === 'completed' || latestSync.status === 'running') {
+      const reportQuery = db
+        .select({
+          id: interplayReports.id,
+          status: interplayReports.status,
+          createdAt: interplayReports.createdAt,
+          completedAt: interplayReports.completedAt,
+          errorMessage: interplayReports.errorMessage,
+        })
+        .from(interplayReports)
+        .where(
+          latestSync.startedAt
+            ? and(
+                eq(interplayReports.clientAccountId, id),
+                gte(interplayReports.createdAt, latestSync.startedAt)
+              )
+            : eq(interplayReports.clientAccountId, id)
+        )
+        .orderBy(desc(interplayReports.createdAt))
+        .limit(1);
+
+      const [latestReport] = await reportQuery;
+
+      if (latestReport) {
+        reportInfo = {
+          status: latestReport.status,
+          reportId: latestReport.id,
+          createdAt: latestReport.createdAt?.toISOString() || null,
+          completedAt: latestReport.completedAt?.toISOString() || null,
+          errorMessage: latestReport.errorMessage,
+        };
+      } else {
+        // Sync running/completed but no report yet - might be pending creation
+        reportInfo = {
+          status: 'none',
+          reportId: null,
+          createdAt: null,
+          completedAt: null,
+          errorMessage: null,
+        };
+      }
+    }
+
+    const isReady = latestSync.status === 'completed' && reportInfo?.status === 'completed';
+
+    res.json({
+      sync: {
+        status: latestSync.status,
+        jobId: latestSync.id,
+        startedAt: latestSync.startedAt?.toISOString() || null,
+        completedAt: latestSync.completedAt?.toISOString() || null,
+        errorMessage: latestSync.errorMessage,
+      },
+      report: reportInfo,
+      isReady,
+      syncStartedAt: latestSync.startedAt?.toISOString() || null,
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to get sync status');
+    res.status(500).json({ error: 'Failed to get sync status' });
   }
 });
 

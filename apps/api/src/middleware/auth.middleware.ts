@@ -4,14 +4,18 @@ import { authLogger } from '@/utils/logger.js';
 import { db, users } from '@/db/index.js';
 import { eq } from 'drizzle-orm';
 
-// Extend Express Request to include Clerk auth
+// Extend Express Request to include our custom user data
+// Note: Do NOT override req.auth - that's used by Clerk's getAuth()
 declare global {
   namespace Express {
     interface Request {
-      auth?: {
-        userId: string | null;
-        orgId: string | null;
-        sessionId: string | null;
+      currentUser?: {
+        id: string;
+        clerkUserId: string;
+        agencyId: string;
+        email: string;
+        name: string;
+        role: string;
       };
     }
   }
@@ -23,10 +27,28 @@ declare global {
  */
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
   try {
+    // Short-circuit if already authenticated (prevents double-auth when multiple
+    // routers are mounted at the same path, e.g., /api/clients)
+    if (req.currentUser) {
+      return next();
+    }
+
+    // Debug: Log the Authorization header presence (but not the token itself)
+    const authHeader = req.headers.authorization;
+    authLogger.debug({
+      hasAuthHeader: !!authHeader,
+      authHeaderType: authHeader ? authHeader.split(' ')[0] : null,
+      url: req.url,
+      method: req.method,
+    }, 'Auth middleware invoked');
+
     const auth = getAuth(req);
 
     if (!auth.userId) {
-      authLogger.warn('No Clerk userId in request');
+      authLogger.warn({
+        hasAuthHeader: !!authHeader,
+        url: req.url,
+      }, 'No Clerk userId in request');
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
@@ -75,21 +97,26 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       }
     }
 
-    // Attach auth info to request
-    req.auth = {
-      userId: auth.userId,
-      orgId: auth.orgId || null,
-      sessionId: auth.sessionId || null,
-    };
-
-    // Attach user data to request for convenience
+    // Attach user data to request (don't overwrite req.auth - Clerk uses it)
+    req.currentUser = user[0];
+    // Keep req.user for backwards compatibility with existing route handlers
     (req as any).user = user[0];
 
     authLogger.debug({ userId: auth.userId, orgId: auth.orgId }, 'User authenticated');
 
     return next();
   } catch (error) {
-    authLogger.error({ error }, 'Authentication failed');
+    // Enhanced error logging to diagnose empty error objects
+    const errorDetails = {
+      errorType: error?.constructor?.name,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack?.split('\n').slice(0, 5) : undefined,
+      hasAuthHeader: !!req.headers.authorization,
+      url: req.url,
+      method: req.method,
+      contentType: req.headers['content-type'],
+    };
+    authLogger.error(errorDetails, 'Authentication failed');
     return res.status(401).json({ error: 'Invalid session' });
   }
 }
@@ -99,8 +126,9 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
  * Use this for routes that should only be accessed within an organization
  */
 export function requireOrganization(req: Request, res: Response, next: NextFunction) {
-  if (!req.auth?.orgId) {
-    authLogger.warn({ userId: req.auth?.userId }, 'No organization context');
+  const auth = getAuth(req);
+  if (!auth?.orgId) {
+    authLogger.warn({ userId: auth?.userId }, 'No organization context');
     return res.status(403).json({ error: 'Organization context required' });
   }
   return next();

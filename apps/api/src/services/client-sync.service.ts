@@ -1,10 +1,15 @@
 import { db } from '@/db/index.js';
 import { clientAccounts, searchQueries, searchConsoleQueries, syncJobs } from '@/db/schema.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, lt, or, isNull } from 'drizzle-orm';
 import { getSearchAnalytics } from '@/services/search-console.service.js';
 import { normalizeQuery, hashQuery } from '@/services/query-matcher.service.js';
 import { syncLogger } from '@/utils/logger.js';
 import { generateInterplayReport, hasExistingReports } from '@/services/interplay-report/index.js';
+
+// Configurable timeout for sync jobs (in minutes)
+// Initial syncs with GA4 + Ads + SC can take 15-20 minutes for large accounts
+const parsedTimeout = Number.parseInt(process.env.SYNC_JOB_TIMEOUT_MINUTES || '30', 10);
+const SYNC_JOB_TIMEOUT_MINUTES = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30;
 
 /**
  * Run data sync for a client from Google Ads and Search Console
@@ -38,6 +43,36 @@ export async function runClientSync(
 
     if (!client) {
       throw new Error(`Client not found: ${clientId}`);
+    }
+
+    // Mark stale RUNNING jobs as failed (jobs stuck beyond timeout)
+    // This handles cases where the server crashed mid-sync or jobs are stuck
+    // Default 30 min timeout allows for large initial syncs with GA4 + Ads + SC
+    const timeoutThreshold = new Date(Date.now() - SYNC_JOB_TIMEOUT_MINUTES * 60 * 1000);
+    const staleJobsResult = await db
+      .update(syncJobs)
+      .set({
+        status: 'failed',
+        errorMessage: `Job timed out after ${SYNC_JOB_TIMEOUT_MINUTES} minutes`,
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(syncJobs.clientAccountId, clientId),
+          eq(syncJobs.status, 'running'),
+          or(
+            isNull(syncJobs.startedAt), // handle missing startedAt
+            lt(syncJobs.startedAt, timeoutThreshold)
+          )
+        )
+      )
+      .returning({ id: syncJobs.id });
+
+    if (staleJobsResult.length > 0) {
+      syncLogger.warn(
+        { clientId, staleJobIds: staleJobsResult.map(j => j.id), timeoutMinutes: SYNC_JOB_TIMEOUT_MINUTES },
+        'Marked stale sync jobs as failed'
+      );
     }
 
     // Create or use existing sync job record

@@ -162,36 +162,16 @@ export async function processUploadSession(
   // Per Phase 4 spec, CSV uploads should auto-trigger report generation
   // when Tier 1 data is first uploaded
   const tier1FileTypes = ['google_ads_searches', 'google_ads_keywords', 'auction_insights'];
+  // Note: Auto-report generation is now handled by the OAuth sync service
+  // (client-sync.service.ts) which waits for all API data to be fetched.
+  // CSV upload alone doesn't trigger reports to avoid racing with OAuth sync.
   const hasTier1Data = result.imported.some(f => tier1FileTypes.includes(f.fileType));
 
   if (hasTier1Data) {
-    try {
-      // Check if this is the first data upload (no existing reports)
-      const hasReports = await hasExistingReports(clientAccountId);
-
-      if (!hasReports) {
-        logger.info(
-          { clientAccountId, sessionId },
-          'First Tier 1 data upload - triggering report generation'
-        );
-
-        // Fire-and-forget: don't await, don't block upload response
-        generateInterplayReport(clientAccountId, { days: 30, trigger: 'client_creation' })
-          .then((reportId) => {
-            logger.info({ clientAccountId, reportId }, 'Auto-triggered report generation complete');
-          })
-          .catch((err) => {
-            logger.error({ err, clientAccountId }, 'Auto-triggered report generation failed');
-          });
-      } else {
-        logger.info(
-          { clientAccountId, sessionId },
-          'Tier 1 data uploaded - report already exists, skipping auto-generation'
-        );
-      }
-    } catch (error) {
-      logger.error({ error, clientAccountId }, 'Failed to check/trigger report generation');
-    }
+    logger.info(
+      { clientAccountId, sessionId, tier1Files: result.imported.filter(f => tier1FileTypes.includes(f.fileType)).length },
+      'Tier 1 data uploaded - report generation will be triggered after OAuth sync completes'
+    );
   }
 
   return result;

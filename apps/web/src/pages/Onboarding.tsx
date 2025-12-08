@@ -183,7 +183,12 @@ export default function Onboarding() {
   };
 
   const handleComplete = () => {
-    navigate('/');
+    if (clientId) {
+      navigate(`/clients/${clientId}/preparing`);
+    } else {
+      // Fallback - shouldn't happen but handle gracefully
+      navigate('/');
+    }
   };
 
   const steps = [

@@ -39,8 +39,19 @@ app.use(requestLogger);
 // Webhook routes BEFORE clerkMiddleware (no auth required)
 app.use('/api', clerkWebhooksRoutes);
 
+// Google OAuth callback - BEFORE clerkMiddleware (no auth, redirect from Google)
+app.get('/api/google/callback', async (req, res) => {
+  // Import and delegate to the handler from google-oauth.routes
+  const { handleGoogleOAuthCallback } = await import('./routes/google-oauth.routes.js');
+  return handleGoogleOAuthCallback(req, res);
+});
+
 // Add Clerk middleware to parse and validate tokens
-app.use(clerkMiddleware());
+// Disable handshake for cross-origin API (frontend on :5173, API on :3001)
+// This allows Bearer token auth without requiring the __client_uat cookie
+app.use(clerkMiddleware({
+  enableHandshake: false,
+}));
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
