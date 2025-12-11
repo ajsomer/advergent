@@ -39,7 +39,14 @@ import {
   storeConstraintViolations,
 } from './queries.js';
 
-import { constructInterplayDataFromDb } from './utils/index.js';
+import {
+  constructInterplayDataFromDb,
+  // Phase 9: Instrumentation
+  createMetricsBuilder,
+  saveReportMetrics,
+  analyzeOutputForViolations,
+  checkAndAlertCriticalViolations,
+} from './utils/index.js';
 
 import type {
   GenerateReportOptions,
@@ -83,10 +90,26 @@ export async function generateInterplayReport(
   options: GenerateReportOptions
 ): Promise<GenerateReportResult> {
   const startTime = Date.now();
-  const businessType = options.businessType ?? DEFAULT_BUSINESS_TYPE;
-  const usedDefault = !options.businessType;
 
-  return generateInterplayReportWithSkill(clientAccountId, options, businessType, startTime, usedDefault);
+  // Fetch client context first to get their configured business type
+  const clientContext = await getClientContext(clientAccountId);
+
+  // Resolution order: explicit override > client DB value > default
+  const businessType = options.businessType ?? clientContext.businessType ?? DEFAULT_BUSINESS_TYPE;
+  const businessTypeSource = options.businessType
+    ? 'override'
+    : clientContext.businessType
+      ? 'client'
+      : 'default';
+
+  return generateInterplayReportWithSkill(
+    clientAccountId,
+    options,
+    businessType,
+    startTime,
+    businessTypeSource,
+    clientContext
+  );
 }
 
 /**
@@ -97,13 +120,17 @@ async function generateInterplayReportWithSkill(
   options: GenerateReportOptions,
   businessType: BusinessType,
   startTime: number,
-  usedDefault: boolean
+  businessTypeSource: 'override' | 'client' | 'default',
+  clientContext: { clientName?: string; businessType?: BusinessType; industry?: string; targetMarket?: string }
 ): Promise<GenerateReportResult> {
   const days = options.days || 30;
   const warnings: ReportWarning[] = [];
 
   // Initialize performance metrics
   const performance: Partial<ReportPerformanceMetrics> = {};
+
+  // Phase 9: Initialize metrics builder for instrumentation
+  const metricsBuilder = createMetricsBuilder();
 
   // 1. Load skill bundle for the business type
   const skillLoadStart = Date.now();
@@ -124,7 +151,7 @@ async function generateInterplayReportWithSkill(
       trigger: options.trigger,
       days,
       businessType,
-      usedDefaultBusinessType: usedDefault,
+      businessTypeSource,
       usingFallback: skillResult.usingFallback,
       skillVersion: skillResult.bundle.version,
       skillLoadTimeMs: performance.skillLoadTimeMs,
@@ -141,11 +168,11 @@ async function generateInterplayReportWithSkill(
     orchestratorLogger.warn({ warning: skillResult.warning }, 'Skill loading warning');
   }
 
-  // Add warning if using default business type
-  if (usedDefault) {
+  // Add warning if using default business type (client has no configured type)
+  if (businessTypeSource === 'default') {
     warnings.push({
       type: 'default-business-type',
-      message: `No business type specified, using default: ${DEFAULT_BUSINESS_TYPE}`,
+      message: `Client has no business type configured, using default: ${DEFAULT_BUSINESS_TYPE}`,
     });
   }
 
@@ -180,8 +207,7 @@ async function generateInterplayReportWithSkill(
       startedAt: new Date(),
     });
 
-    // Fetch client context for agent prompts
-    const clientContext = await getClientContext(clientAccountId);
+    // Client context already fetched in generateInterplayReport() for business type resolution
 
     // 2. Fetch raw data
     const dataFetchStart = Date.now();
@@ -325,6 +351,20 @@ async function generateInterplayReportWithSkill(
     // Calculate total duration
     performance.totalDurationMs = Date.now() - startTime;
 
+    // Phase 9: Analyze final output for any slipped violations
+    const outputAnalysis = analyzeOutputForViolations(directorOutput, businessType);
+
+    // Phase 9: Alert on critical violations
+    checkAndAlertCriticalViolations(reportId, businessType, outputAnalysis);
+
+    // Phase 9: Build violations by rule map
+    const violationsByRule: Record<string, number> = {};
+    if (directorOutput.validationResult?.violations) {
+      for (const violation of directorOutput.validationResult.violations) {
+        violationsByRule[violation.ruleId] = (violationsByRule[violation.ruleId] || 0) + 1;
+      }
+    }
+
     // Build final performance metrics
     const finalPerformance: ReportPerformanceMetrics = {
       totalDurationMs: performance.totalDurationMs,
@@ -354,6 +394,40 @@ async function generateInterplayReportWithSkill(
       reportId,
       directorOutput.unifiedRecommendations
     );
+
+    // Phase 9: Save report metrics (non-blocking)
+    metricsBuilder
+      .setReportContext(reportId, clientAccountId, businessType)
+      .setSkillInfo(skillBundle.version, skillResult.usingFallback)
+      .setConstraintViolations(
+        directorOutput.validationResult?.violations.length ?? 0,
+        violationsByRule
+      )
+      .setContentAnalysis(
+        outputAnalysis.roasMentions,
+        outputAnalysis.productSchemaRecommended,
+        outputAnalysis.invalidMetrics
+      )
+      .setPerformance({
+        skillLoadTimeMs: performance.skillLoadTimeMs,
+        scoutDurationMs: performance.scoutDurationMs,
+        researcherDurationMs: performance.researcherDurationMs,
+        semDurationMs: performance.semDurationMs,
+        seoDurationMs: performance.seoDurationMs,
+        directorDurationMs: performance.directorDurationMs,
+        totalDurationMs: performance.totalDurationMs,
+      })
+      .setTokenBudget({
+        // Token budget tracking will be populated when serialization is implemented
+        truncationApplied: false,
+        keywordsDropped: 0,
+        pagesDropped: 0,
+      });
+
+    // Save metrics asynchronously (don't block report generation)
+    saveReportMetrics(metricsBuilder.build()).catch((err) => {
+      orchestratorLogger.error({ error: err, reportId }, 'Failed to save report metrics');
+    });
 
     // Build final metadata
     const metadata: ReportGenerationMetadata = {
@@ -464,6 +538,7 @@ async function getClientContext(clientAccountId: string) {
   const [client] = await db
     .select({
       name: clientAccounts.name,
+      businessType: clientAccounts.businessType,
     })
     .from(clientAccounts)
     .where(eq(clientAccounts.id, clientAccountId))
@@ -471,6 +546,7 @@ async function getClientContext(clientAccountId: string) {
 
   return {
     clientName: client?.name,
+    businessType: client?.businessType,
     industry: undefined, // Could be added to client_accounts table
     targetMarket: undefined, // Could be added to client_accounts table
   };

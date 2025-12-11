@@ -19,6 +19,8 @@ import { logger } from '@/utils/logger.js';
 // Import implemented skill bundles
 import { ecommerceSkillBundle } from './ecommerce/index.js';
 import { leadGenSkillBundle } from './lead-gen/index.js';
+import { saasSkillBundle } from './saas/index.js';
+import { localSkillBundle } from './local/index.js';
 
 // ============================================================================
 // SKILL REGISTRY
@@ -27,14 +29,13 @@ import { leadGenSkillBundle } from './lead-gen/index.js';
 const skillRegistry: Record<BusinessType, AgentSkillBundle | null> = {
   'ecommerce': ecommerceSkillBundle,
   'lead-gen': leadGenSkillBundle,
-  'saas': null, // Uses fallback
-  'local': null, // Uses fallback
+  'saas': saasSkillBundle,
+  'local': localSkillBundle,
 };
 
-// Fallback mappings for unimplemented types
+// Fallback mappings for unimplemented types (none needed - all types implemented)
 const FALLBACK_MAPPINGS: Partial<Record<BusinessType, BusinessType>> = {
-  'saas': 'lead-gen', // SaaS is similar to lead-gen (both lead-based)
-  'local': 'ecommerce', // Local has some ecommerce patterns
+  // All business types now have full implementations
 };
 
 // ============================================================================

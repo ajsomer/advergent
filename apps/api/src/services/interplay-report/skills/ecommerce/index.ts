@@ -1,20 +1,24 @@
-import type { AgentSkillBundle } from '../types.js';
-import {
-  createPlaceholderScoutSkill,
-  createPlaceholderResearcherSkill,
-  createPlaceholderSEMSkill,
-  createPlaceholderSEOSkill,
-  createPlaceholderDirectorSkill,
-} from '../placeholders/index.js';
+/**
+ * Ecommerce Skill Bundle
+ *
+ * Complete skill definitions for ecommerce businesses.
+ * Focus: ROAS optimization, Shopping campaigns, product pages, revenue growth.
+ */
 
-// Using placeholders until real skills are implemented in Phase 10
+import type { AgentSkillBundle } from '../types.js';
+import { ecommerceScoutSkill } from './scout.skill.js';
+import { ecommerceResearcherSkill } from './researcher.skill.js';
+import { ecommerceSEMSkill } from './sem.skill.js';
+import { ecommerceSEOSkill } from './seo.skill.js';
+import { ecommerceDirectorSkill } from './director.skill.js';
+
 export const ecommerceSkillBundle: AgentSkillBundle = {
   businessType: 'ecommerce',
-  version: '0.1.0-placeholder',
+  version: '1.0.0',
 
-  scout: createPlaceholderScoutSkill('ecommerce'),
-  researcher: createPlaceholderResearcherSkill('ecommerce'),
-  sem: createPlaceholderSEMSkill('ecommerce'),
-  seo: createPlaceholderSEOSkill('ecommerce'),
-  director: createPlaceholderDirectorSkill('ecommerce'),
+  scout: ecommerceScoutSkill,
+  researcher: ecommerceResearcherSkill,
+  sem: ecommerceSEMSkill,
+  seo: ecommerceSEOSkill,
+  director: ecommerceDirectorSkill,
 };

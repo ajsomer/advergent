@@ -1,20 +1,24 @@
-import type { AgentSkillBundle } from '../types.js';
-import {
-  createPlaceholderScoutSkill,
-  createPlaceholderResearcherSkill,
-  createPlaceholderSEMSkill,
-  createPlaceholderSEOSkill,
-  createPlaceholderDirectorSkill,
-} from '../placeholders/index.js';
+/**
+ * Lead-Gen Skill Bundle
+ *
+ * Complete skill definitions for lead generation businesses.
+ * Focus: Cost per lead optimization, form submissions, phone calls, trust signals.
+ */
 
-// Using placeholders until real skills are implemented in Phase 10
+import type { AgentSkillBundle } from '../types.js';
+import { leadGenScoutSkill } from './scout.skill.js';
+import { leadGenResearcherSkill } from './researcher.skill.js';
+import { leadGenSEMSkill } from './sem.skill.js';
+import { leadGenSEOSkill } from './seo.skill.js';
+import { leadGenDirectorSkill } from './director.skill.js';
+
 export const leadGenSkillBundle: AgentSkillBundle = {
   businessType: 'lead-gen',
-  version: '0.1.0-placeholder',
+  version: '1.0.0',
 
-  scout: createPlaceholderScoutSkill('lead-gen'),
-  researcher: createPlaceholderResearcherSkill('lead-gen'),
-  sem: createPlaceholderSEMSkill('lead-gen'),
-  seo: createPlaceholderSEOSkill('lead-gen'),
-  director: createPlaceholderDirectorSkill('lead-gen'),
+  scout: leadGenScoutSkill,
+  researcher: leadGenResearcherSkill,
+  sem: leadGenSEMSkill,
+  seo: leadGenSEOSkill,
+  director: leadGenDirectorSkill,
 };

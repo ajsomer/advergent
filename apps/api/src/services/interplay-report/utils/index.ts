@@ -18,3 +18,24 @@ export {
   type ConstraintViolation,
   type ConstraintValidationResult,
 } from './constraint-validation.js';
+
+// Phase 9: Instrumentation
+export {
+  saveReportMetrics,
+  createMetricsBuilder,
+  MetricsBuilder,
+  type ReportMetricsData,
+} from './metrics.js';
+
+export {
+  analyzeOutputForViolations,
+  countMetricMentions,
+  type OutputAnalysis,
+} from './output-analysis.js';
+
+export {
+  checkAndAlertCriticalViolations,
+  logConstraintViolationSummary,
+  type SkillAlert,
+  type AlertSeverity,
+} from './alerts.js';

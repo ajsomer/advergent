@@ -85,6 +85,13 @@
       "when": 1765415421360,
       "tag": "0011_solid_sabra",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1765416750903,
+      "tag": "0012_melted_shriek",
+      "breakpoints": true
     }
   ]
 }

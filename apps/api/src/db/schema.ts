@@ -31,6 +31,9 @@ export const constraintViolationSourceEnum = pgEnum('constraint_violation_source
 // Phase 7: Business Type enum - must match BusinessType in skills/types.ts
 export const businessTypeEnum = pgEnum('business_type', ['ecommerce', 'lead-gen', 'saas', 'local']);
 
+// Phase 9: Instrumentation enums
+export const serializationModeEnum = pgEnum('serialization_mode', ['full', 'compact']);
+
 // ============================================================================
 // CORE TABLES
 // ============================================================================
@@ -763,6 +766,73 @@ export const constraintViolationsRelations = relations(constraintViolations, ({ 
   }),
   clientAccount: one(clientAccounts, {
     fields: [constraintViolations.clientAccountId],
+    references: [clientAccounts.id],
+  }),
+}));
+
+// ============================================================================
+// REPORT METRICS (PHASE 9)
+// ============================================================================
+
+/**
+ * Tracks skill effectiveness, constraint violations, and report quality over time.
+ * Used for monitoring system health and identifying prompt quality issues.
+ */
+export const reportMetrics = pgTable('report_metrics', {
+  id: uuid('id').primaryKey().defaultRandom(),
+
+  // Link to the report
+  reportId: uuid('report_id').notNull().references(() => interplayReports.id, { onDelete: 'cascade' }),
+
+  // Client context
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+
+  // Skill information
+  businessType: varchar('business_type', { length: 50 }).notNull(),
+  skillVersion: varchar('skill_version', { length: 20 }).notNull(),
+  usingFallback: boolean('using_fallback').notNull().default(false),
+
+  // Constraint violations
+  constraintViolations: integer('constraint_violations').notNull().default(0),
+  violationsByRule: text('violations_by_rule').notNull().default('{}'), // JSON string
+
+  // Content analysis
+  roasMentions: integer('roas_mentions').notNull().default(0),
+  productSchemaRecommended: boolean('product_schema_recommended').notNull().default(false),
+  invalidMetricsDetected: text('invalid_metrics_detected').array().notNull().default([]),
+
+  // Performance metrics
+  skillLoadTimeMs: integer('skill_load_time_ms'),
+  scoutDurationMs: integer('scout_duration_ms'),
+  researcherDurationMs: integer('researcher_duration_ms'),
+  semDurationMs: integer('sem_duration_ms'),
+  seoDurationMs: integer('seo_duration_ms'),
+  directorDurationMs: integer('director_duration_ms'),
+  totalDurationMs: integer('total_duration_ms'),
+
+  // Token budget
+  serializationMode: serializationModeEnum('serialization_mode'),
+  truncationApplied: boolean('truncation_applied').notNull().default(false),
+  keywordsDropped: integer('keywords_dropped').notNull().default(0),
+  pagesDropped: integer('pages_dropped').notNull().default(0),
+
+  // Timestamps
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  reportIdx: index('idx_report_metrics_report_id').on(table.reportId),
+  clientIdx: index('idx_report_metrics_client_account_id').on(table.clientAccountId),
+  businessTypeIdx: index('idx_report_metrics_business_type').on(table.businessType),
+  createdAtIdx: index('idx_report_metrics_created_at').on(table.createdAt),
+  skillVersionIdx: index('idx_report_metrics_skill_version').on(table.skillVersion),
+}));
+
+export const reportMetricsRelations = relations(reportMetrics, ({ one }) => ({
+  interplayReport: one(interplayReports, {
+    fields: [reportMetrics.reportId],
+    references: [interplayReports.id],
+  }),
+  clientAccount: one(clientAccounts, {
+    fields: [reportMetrics.clientAccountId],
     references: [clientAccounts.id],
   }),
 }));
