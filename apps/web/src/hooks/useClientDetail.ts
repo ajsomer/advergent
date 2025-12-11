@@ -159,6 +159,7 @@ export interface Client {
   googleAdsCustomerId?: string;
   searchConsoleSiteUrl?: string;
   ga4PropertyId?: string;
+  businessType?: string;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

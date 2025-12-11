@@ -78,6 +78,13 @@
       "when": 1765414810268,
       "tag": "0010_furry_greymalkin",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1765415421360,
+      "tag": "0011_solid_sabra",
+      "breakpoints": true
     }
   ]
 }

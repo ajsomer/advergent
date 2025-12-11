@@ -28,6 +28,9 @@ export const effortLevelEnum = pgEnum('effort_level', ['high', 'medium', 'low'])
 // Phase 6: Constraint Validation enums
 export const constraintViolationSourceEnum = pgEnum('constraint_violation_source', ['sem', 'seo']);
 
+// Phase 7: Business Type enum - must match BusinessType in skills/types.ts
+export const businessTypeEnum = pgEnum('business_type', ['ecommerce', 'lead-gen', 'saas', 'local']);
+
 // ============================================================================
 // CORE TABLES
 // ============================================================================
@@ -94,6 +97,8 @@ export const clientAccounts = pgTable('client_accounts', {
   ga4RefreshTokenEncrypted: text('ga4_refresh_token_encrypted'),
   ga4RefreshTokenKeyVersion: integer('ga4_refresh_token_key_version').default(1),
   syncFrequency: varchar('sync_frequency', { length: 20 }).default('daily'),
+  // Phase 7: Business type for skill loading
+  businessType: businessTypeEnum('business_type').default('ecommerce').notNull(),
   isActive: boolean('is_active').default(true),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
@@ -101,6 +106,7 @@ export const clientAccounts = pgTable('client_accounts', {
   agencyIdx: index('idx_client_accounts_agency_id').on(table.agencyId),
   isActiveIdx: index('idx_client_accounts_is_active').on(table.isActive),
   googleAdsCustomerIdx: index('idx_client_accounts_google_ads_customer_id').on(table.googleAdsCustomerId),
+  businessTypeIdx: index('idx_client_accounts_business_type').on(table.businessType),
 }));
 
 // ============================================================================

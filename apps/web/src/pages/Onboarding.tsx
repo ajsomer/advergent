@@ -7,8 +7,9 @@ import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { CheckCircle2, Circle, Loader2, LayoutDashboard, Globe } from 'lucide-react';
+import { BusinessTypeSelector, type BusinessType, type BusinessTypeOption } from '@/components/clients/BusinessTypeSelector';
 
-type OnboardingStep = 'create-client' | 'select-mode' | 'connect-google-ads' | 'connect-search-console' | 'connect-ga4' | 'complete';
+type OnboardingStep = 'create-client' | 'select-business-type' | 'select-mode' | 'connect-google-ads' | 'connect-search-console' | 'connect-ga4' | 'complete';
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -24,6 +25,28 @@ export default function Onboarding() {
   const [searchConsoleConnected, setSearchConsoleConnected] = useState(false);
   const [ga4Connected, setGa4Connected] = useState(false);
   const [onboardingMode, setOnboardingMode] = useState<'unified' | 'split' | null>(null);
+  const [businessType, setBusinessType] = useState<BusinessType>('ecommerce');
+  const [businessTypeOptions, setBusinessTypeOptions] = useState<BusinessTypeOption[]>([]);
+
+  // Fetch available business types on mount
+  useEffect(() => {
+    async function fetchBusinessTypes() {
+      try {
+        const response = await api.get('/api/clients/business-types');
+        setBusinessTypeOptions(response.data.types);
+      } catch (err) {
+        console.error('Failed to fetch business types:', err);
+        // Fallback to default options
+        setBusinessTypeOptions([
+          { value: 'ecommerce', label: 'Ecommerce', description: 'Online retail, product sales, marketplaces, D2C brands', isFullySupported: true },
+          { value: 'lead-gen', label: 'Lead Generation', description: 'Lead generation, form submissions, B2B services, agencies', isFullySupported: true },
+          { value: 'saas', label: 'SaaS', description: 'Software as a Service, subscription products', isFullySupported: false, fallbackNote: 'Uses Lead Generation skills' },
+          { value: 'local', label: 'Local Business', description: 'Local businesses with physical presence (restaurants, dentists, etc.)', isFullySupported: false, fallbackNote: 'Uses Ecommerce skills' },
+        ]);
+      }
+    }
+    fetchBusinessTypes();
+  }, [api]);
 
   // Check for OAuth callback parameters
   useEffect(() => {
@@ -75,6 +98,7 @@ export default function Onboarding() {
     try {
       const response = await api.post('/api/clients', {
         name: clientName,
+        businessType,
       });
 
       setClientId(response.data.id);
@@ -83,6 +107,12 @@ export default function Onboarding() {
       setError(err.response?.data?.error || 'Failed to create client');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleContinueToBusinessType = () => {
+    if (clientName.trim()) {
+      setCurrentStep('select-business-type');
     }
   };
 
@@ -192,15 +222,18 @@ export default function Onboarding() {
   };
 
   const steps = [
-    { key: 'create-client', label: 'Create Client', completed: !!clientId },
-    { key: 'select-mode', label: 'Select Mode', completed: !!onboardingMode },
+    { key: 'create-client', label: 'Client Info', completed: !!clientName.trim() && currentStep !== 'create-client' },
+    { key: 'select-business-type', label: 'Business Type', completed: currentStep !== 'create-client' && currentStep !== 'select-business-type' },
+    { key: 'select-mode', label: 'Connect', completed: !!onboardingMode },
     ...(onboardingMode === 'unified'
-      ? [{ key: 'connect-unified', label: 'Connect Accounts', completed: currentStep === 'complete' }]
-      : [
-        { key: 'connect-google-ads', label: 'Connect Google Ads', completed: googleAdsConnected },
-        { key: 'connect-search-console', label: 'Connect Search Console', completed: searchConsoleConnected },
-        { key: 'connect-ga4', label: 'Connect GA4', completed: ga4Connected },
-      ]
+      ? [{ key: 'connect-unified', label: 'Accounts', completed: currentStep === 'complete' }]
+      : onboardingMode === 'split'
+        ? [
+          { key: 'connect-google-ads', label: 'Google Ads', completed: googleAdsConnected },
+          { key: 'connect-search-console', label: 'Search Console', completed: searchConsoleConnected },
+          { key: 'connect-ga4', label: 'GA4', completed: ga4Connected },
+        ]
+        : []
     ),
     { key: 'complete', label: 'Complete', completed: currentStep === 'complete' },
   ];
@@ -255,7 +288,7 @@ export default function Onboarding() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <form onSubmit={handleCreateClient} className="space-y-4">
+                <div className="space-y-4">
                   <div>
                     <Label htmlFor="clientName">Client Name</Label>
                     <Input
@@ -267,16 +300,55 @@ export default function Onboarding() {
                       required
                     />
                   </div>
-                  <Button type="submit" disabled={loading || !clientName.trim()}>
-                    {loading ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      'Continue'
-                    )}
+                  <Button
+                    type="button"
+                    disabled={!clientName.trim()}
+                    onClick={handleContinueToBusinessType}
+                  >
+                    Continue
                   </Button>
+                </div>
+              </CardContent>
+            </>
+          )}
+
+          {currentStep === 'select-business-type' && (
+            <>
+              <CardHeader>
+                <CardTitle>What type of business is this?</CardTitle>
+                <CardDescription>
+                  This helps us provide more accurate recommendations tailored to your client's business model.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <form onSubmit={handleCreateClient} className="space-y-6">
+                  {businessTypeOptions.length > 0 && (
+                    <BusinessTypeSelector
+                      value={businessType}
+                      onChange={setBusinessType}
+                      options={businessTypeOptions}
+                    />
+                  )}
+
+                  <div className="flex gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setCurrentStep('create-client')}
+                    >
+                      Back
+                    </Button>
+                    <Button type="submit" disabled={loading}>
+                      {loading ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        'Continue'
+                      )}
+                    </Button>
+                  </div>
                 </form>
               </CardContent>
             </>

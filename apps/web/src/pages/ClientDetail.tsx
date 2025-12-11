@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useClientDetail, useRunAnalysis, useUpdateRecommendationStatus, useSyncClientData } from '@/hooks/useClientDetail';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -13,13 +13,16 @@ import { GA4MetricsTable } from '@/components/clients/GA4MetricsTable';
 import { AnalysisRunForm } from '@/components/clients/AnalysisRunForm';
 import { GA4LandingPageTable } from '@/components/clients/GA4LandingPageTable';
 import { FullAnalysisModal } from '@/components/clients/FullAnalysisModal';
-import { ArrowLeft, RefreshCw, FileText } from 'lucide-react';
+import { ArrowLeft, RefreshCw, FileText, Settings } from 'lucide-react';
 import { ReportsTab } from '@/components/clients/ReportsTab';
+import { ClientSettings } from '@/components/clients/settings';
+import type { BusinessType } from '@/components/clients/BusinessTypeSelector';
 
-type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'ga4' | 'analysis' | 'reports';
+type TabType = 'overview' | 'recommendations' | 'query-data' | 'search-console' | 'ga4' | 'analysis' | 'reports' | 'settings';
 
 export default function ClientDetail() {
   const { clientId } = useParams<{ clientId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
   const [recommendationFilters, setRecommendationFilters] = useState({
@@ -27,6 +30,26 @@ export default function ClientDetail() {
     recommendationType: undefined as string | undefined,
     confidenceLevel: undefined as string | undefined,
   });
+
+  // Handle tab from URL query param
+  useEffect(() => {
+    const tabParam = searchParams.get('tab') as TabType | null;
+    if (tabParam && ['overview', 'recommendations', 'query-data', 'search-console', 'ga4', 'analysis', 'reports', 'settings'].includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (tab: TabType) => {
+    setActiveTab(tab);
+    // Update URL without full navigation
+    const newParams = new URLSearchParams(searchParams);
+    if (tab === 'overview') {
+      newParams.delete('tab');
+    } else {
+      newParams.set('tab', tab);
+    }
+    setSearchParams(newParams, { replace: true });
+  };
 
   if (!clientId) {
     return <div>Client ID not found</div>;
@@ -76,6 +99,7 @@ export default function ClientDetail() {
     { id: 'ga4' as const, label: 'GA4 Analytics', badge: ga4Data?.totalMetrics },
     { id: 'analysis' as const, label: 'Analysis' },
     { id: 'reports' as const, label: 'Reports', icon: FileText },
+    { id: 'settings' as const, label: 'Settings', icon: Settings },
   ];
 
   return (
@@ -168,7 +192,7 @@ export default function ClientDetail() {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabChange(tab.id)}
               className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === tab.id
                 ? 'border-blue-500 text-blue-600'
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
@@ -400,6 +424,29 @@ export default function ClientDetail() {
         {/* Reports Tab - SEO/SEM Interplay Reports */}
         {activeTab === 'reports' && client && (
           <ReportsTab clientId={clientId} client={client} />
+        )}
+
+        {/* Settings Tab */}
+        {activeTab === 'settings' && client && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Client Settings</CardTitle>
+                <CardDescription>
+                  Configure settings for {client.name}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ClientSettings
+                  clientId={clientId}
+                  currentBusinessType={(client.businessType as BusinessType) || 'ecommerce'}
+                  onUpdate={() => {
+                    refetch.client();
+                  }}
+                />
+              </CardContent>
+            </Card>
+          </div>
         )}
 
       </div>

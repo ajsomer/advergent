@@ -22,19 +22,79 @@ import { contentFetcher } from '@/services/content-fetcher.service.js';
 import { getSearchQueryReport } from '@/services/google-ads.service.js';
 import { getSearchAnalytics } from '@/services/search-console.service.js';
 import { getGA4LandingPageMetrics } from '@/services/ga4.service.js';
+import { isBusinessTypeSupported, type BusinessType } from '@/services/interplay-report/skills/index.js';
 
 const router = Router();
+
+// Business type Zod schema
+const businessTypeSchema = z.enum(['ecommerce', 'lead-gen', 'saas', 'local']);
 
 // Validation schemas
 const createClientSchema = z.object({
   name: z.string().min(1, 'Client name is required').max(255),
+  businessType: businessTypeSchema.default('ecommerce'),
 });
 
 const updateClientSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   googleAdsCustomerId: z.string().optional(),
   searchConsoleSiteUrl: z.string().url().optional(),
+  businessType: businessTypeSchema.optional(),
   isActive: z.boolean().optional(),
+});
+
+// Helper functions for business type metadata
+function getBusinessTypeLabel(type: BusinessType): string {
+  const labels: Record<BusinessType, string> = {
+    'ecommerce': 'Ecommerce',
+    'lead-gen': 'Lead Generation',
+    'saas': 'SaaS',
+    'local': 'Local Business',
+  };
+  return labels[type];
+}
+
+function getBusinessTypeDescription(type: BusinessType): string {
+  const descriptions: Record<BusinessType, string> = {
+    'ecommerce': 'Online retail, product sales, marketplaces, D2C brands',
+    'lead-gen': 'Lead generation, form submissions, B2B services, agencies',
+    'saas': 'Software as a Service, subscription products',
+    'local': 'Local businesses with physical presence (restaurants, dentists, etc.)',
+  };
+  return descriptions[type];
+}
+
+function getFallbackType(type: BusinessType): BusinessType {
+  const fallbacks: Partial<Record<BusinessType, BusinessType>> = {
+    'saas': 'lead-gen',
+    'local': 'ecommerce',
+  };
+  return fallbacks[type] || type;
+}
+
+/**
+ * GET /api/clients/business-types
+ * Returns available business types for selection
+ */
+router.get('/business-types', async (_req: Request, res: Response) => {
+  try {
+    const allTypes: BusinessType[] = ['ecommerce', 'lead-gen', 'saas', 'local'];
+
+    const types = allTypes.map(type => ({
+      value: type,
+      label: getBusinessTypeLabel(type),
+      description: getBusinessTypeDescription(type),
+      isFullySupported: isBusinessTypeSupported(type),
+      fallbackNote: !isBusinessTypeSupported(type)
+        ? `Uses ${getBusinessTypeLabel(getFallbackType(type))} skills`
+        : undefined,
+    }));
+
+    res.json({ types });
+  } catch (error) {
+    logger.error({ error }, 'Failed to get business types');
+    res.status(500).json({ error: 'Failed to get business types' });
+  }
 });
 
 /**
@@ -43,7 +103,7 @@ const updateClientSchema = z.object({
  */
 router.post('/', async (req: Request, res: Response) => {
   try {
-    const { name } = createClientSchema.parse(req.body);
+    const { name, businessType } = createClientSchema.parse(req.body);
     const user = (req as any).user;
 
     if (!user) {
@@ -56,13 +116,18 @@ router.post('/', async (req: Request, res: Response) => {
       .values({
         agencyId: user.agencyId,
         name,
+        businessType,
         isActive: true,
       })
       .returning();
 
-    logger.info({ clientId: client.id, userId: user.id }, 'Client created');
+    logger.info({ clientId: client.id, userId: user.id, businessType }, 'Client created');
 
-    res.status(201).json({ id: client.id, name: client.name });
+    res.status(201).json({
+      id: client.id,
+      name: client.name,
+      businessType: client.businessType,
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ error: 'Invalid request', details: error.errors });
@@ -124,7 +189,19 @@ router.get('/:id', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Client not found' });
     }
 
-    res.json(client);
+    // Include business type support info
+    const businessType = client.businessType as BusinessType;
+    const response = {
+      ...client,
+      businessTypeSupport: {
+        isFullySupported: isBusinessTypeSupported(businessType),
+        fallbackNote: !isBusinessTypeSupported(businessType)
+          ? `Using ${getBusinessTypeLabel(getFallbackType(businessType))} skills as fallback`
+          : undefined,
+      },
+    };
+
+    res.json(response);
   } catch (error) {
     logger.error({ error }, 'Failed to get client');
     res.status(500).json({ error: 'Failed to get client' });
@@ -171,7 +248,14 @@ router.patch('/:id', async (req: Request, res: Response) => {
       .where(eq(clientAccounts.id, id))
       .returning();
 
-    logger.info({ clientId: id, userId: user.id }, 'Client updated');
+    logger.info(
+      {
+        clientId: id,
+        userId: user.id,
+        ...(updates.businessType && { businessType: updates.businessType }),
+      },
+      'Client updated'
+    );
 
     res.json(updatedClient);
   } catch (error) {
