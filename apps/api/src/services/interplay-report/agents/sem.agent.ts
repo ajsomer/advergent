@@ -1,5 +1,8 @@
 /**
  * SEM Agent - AI Analysis of Battleground Keywords
+ *
+ * Supports skill-based configuration for business-type-aware analysis
+ * with token budget management.
  */
 
 import { logger } from '@/utils/logger.js';
@@ -7,13 +10,28 @@ import { callGenericAI } from '@/services/ai-analyzer.service.js';
 import { semAgentOutputSchema } from '../schemas.js';
 import { buildSEMPrompt } from '../prompts/index.js';
 import type { EnrichedKeyword, SEMAgentOutput } from '../types.js';
+import type { SEMSkillDefinition } from '../skills/types.js';
 
 const semLogger = logger.child({ module: 'sem-agent' });
+
+// ============================================================================
+// INPUT/OUTPUT TYPES
+// ============================================================================
 
 export interface SEMAgentContext {
   industry?: string;
   targetMarket?: string;
   clientName?: string;
+}
+
+export interface SEMAgentInput {
+  enrichedKeywords: EnrichedKeyword[];
+  skill: SEMSkillDefinition;
+  clientContext: SEMAgentContext;
+}
+
+export interface SEMAgentOutputWithMeta extends SEMAgentOutput {
+  skillVersion?: string;
 }
 
 /**
@@ -130,21 +148,35 @@ function parseAndValidateResponse(
   return { data: validationResult.data };
 }
 
-export async function runSEMAgent(
-  enrichedKeywords: EnrichedKeyword[],
-  context: SEMAgentContext
-): Promise<SEMAgentOutput> {
+// ============================================================================
+// SEM AGENT
+// ============================================================================
+
+/**
+ * Run SEM agent with skill configuration.
+ * Uses skill-based prompt building and output filtering.
+ */
+export async function runSEMAgent(input: SEMAgentInput): Promise<SEMAgentOutputWithMeta> {
+  const { enrichedKeywords, skill, clientContext } = input;
+
   semLogger.info(
-    { keywordCount: enrichedKeywords.length },
-    'SEM Agent: Starting AI analysis'
+    {
+      keywordCount: enrichedKeywords.length,
+      skillVersion: skill.version,
+    },
+    'SEM Agent: Starting skill-based AI analysis'
   );
 
   if (enrichedKeywords.length === 0) {
     semLogger.warn('SEM Agent: No keywords to analyze');
-    return { semActions: [] };
+    return { semActions: [], skillVersion: skill.version };
   }
 
-  const prompt = buildSEMPrompt(enrichedKeywords, context);
+  // Build prompt using skill configuration
+  const prompt = buildSEMPrompt(enrichedKeywords, {
+    skill,
+    ...clientContext,
+  });
 
   let response: string;
   try {
@@ -170,17 +202,89 @@ export async function runSEMAgent(
     throw new Error(`SEM Agent failed to generate valid JSON analysis: ${result.error}`);
   }
 
+  // Apply output filtering from skill
+  const filteredActions = filterSEMRecommendations(result.data.semActions, skill.output);
+
   if (result.warning) {
     semLogger.warn(
-      { warning: result.warning, actionCount: result.data.semActions.length },
-      'SEM Agent: Analysis completed with warning'
+      {
+        warning: result.warning,
+        originalCount: result.data.semActions.length,
+        filteredCount: filteredActions.length,
+      },
+      'SEM Agent: Skill-based analysis completed with warning'
     );
   } else {
     semLogger.info(
-      { actionCount: result.data.semActions.length },
-      'SEM Agent: Analysis complete'
+      {
+        originalCount: result.data.semActions.length,
+        filteredCount: filteredActions.length,
+        skillVersion: skill.version,
+      },
+      'SEM Agent: Skill-based analysis complete'
     );
   }
 
-  return result.data;
+  return {
+    semActions: filteredActions,
+    skillVersion: skill.version,
+  };
 }
+
+/**
+ * Filter SEM recommendations based on skill output configuration.
+ */
+function filterSEMRecommendations(
+  actions: SEMAgentOutput['semActions'],
+  outputConfig: SEMSkillDefinition['output']
+): SEMAgentOutput['semActions'] {
+  let filtered = [...actions];
+
+  // Exclude recommendations matching exclude types
+  if (outputConfig.recommendationTypes.exclude.length > 0) {
+    filtered = filtered.filter((action) =>
+      !outputConfig.recommendationTypes.exclude.some((excludeType) =>
+        action.action.toLowerCase().includes(excludeType.toLowerCase())
+      )
+    );
+  }
+
+  // Sort to prioritize certain types
+  if (outputConfig.recommendationTypes.prioritize.length > 0) {
+    filtered = filtered.sort((a, b) => {
+      const aPriority = outputConfig.recommendationTypes.prioritize.findIndex((type) =>
+        a.action.toLowerCase().includes(type.toLowerCase())
+      );
+      const bPriority = outputConfig.recommendationTypes.prioritize.findIndex((type) =>
+        b.action.toLowerCase().includes(type.toLowerCase())
+      );
+      // Items matching priority types come first, then by original order
+      const aRank = aPriority === -1 ? 999 : aPriority;
+      const bRank = bPriority === -1 ? 999 : bPriority;
+      return aRank - bRank;
+    });
+  }
+
+  // Deprioritize certain types (move to end)
+  if (outputConfig.recommendationTypes.deprioritize.length > 0) {
+    const deprioritized: typeof filtered = [];
+    const regular: typeof filtered = [];
+
+    for (const action of filtered) {
+      const isDeprioritized = outputConfig.recommendationTypes.deprioritize.some((type) =>
+        action.action.toLowerCase().includes(type.toLowerCase())
+      );
+      if (isDeprioritized) {
+        deprioritized.push(action);
+      } else {
+        regular.push(action);
+      }
+    }
+
+    filtered = [...regular, ...deprioritized];
+  }
+
+  // Limit to max recommendations
+  return filtered.slice(0, outputConfig.maxRecommendations);
+}
+

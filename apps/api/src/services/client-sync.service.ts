@@ -439,8 +439,17 @@ export async function runClientSync(
 
             // Fire-and-forget: don't await, don't block sync completion
             generateInterplayReport(clientId, { days: 30, trigger: 'client_creation' })
-              .then((reportId) => {
-                syncLogger.info({ clientId, reportId }, 'Auto-triggered report generation complete');
+              .then(({ reportId, metadata }) => {
+                syncLogger.info(
+                  {
+                    clientId,
+                    reportId,
+                    businessType: metadata.skillBundle.businessType,
+                    skillVersion: metadata.skillBundle.version,
+                    totalDurationMs: metadata.performance.totalDurationMs,
+                  },
+                  'Auto-triggered report generation complete'
+                );
               })
               .catch((err) => {
                 syncLogger.error({ err, clientId }, 'Auto-triggered report generation failed');

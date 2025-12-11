@@ -15,6 +15,9 @@ import type {
   SEOAgentOutput,
   DirectorOutput,
   UnifiedRecommendation,
+  SkillBundleMetadata,
+  ReportPerformanceMetrics,
+  ReportWarning,
 } from './types.js';
 
 // ============================================================================
@@ -125,6 +128,9 @@ export interface UpdateDirectorOutputParams {
   directorOutput: DirectorOutput;
   tokensUsed: number;
   processingTimeMs: number;
+  skillMetadata?: SkillBundleMetadata;
+  performanceMetrics?: ReportPerformanceMetrics;
+  warnings?: ReportWarning[];
 }
 
 export async function updateDirectorOutput(params: UpdateDirectorOutputParams): Promise<void> {
@@ -138,6 +144,9 @@ export async function updateDirectorOutput(params: UpdateDirectorOutputParams): 
       completedAt: new Date(),
       tokensUsed: params.tokensUsed,
       processingTimeMs: params.processingTimeMs,
+      skillMetadataJson: params.skillMetadata ? JSON.stringify(params.skillMetadata) : null,
+      performanceMetricsJson: params.performanceMetrics ? JSON.stringify(params.performanceMetrics) : null,
+      warningsJson: params.warnings && params.warnings.length > 0 ? JSON.stringify(params.warnings) : null,
     })
     .where(eq(interplayReports.id, params.reportId));
 }

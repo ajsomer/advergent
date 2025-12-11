@@ -1,7 +1,7 @@
 /**
  * Interplay Report Service - Public API
  *
- * Phase 4: Multi-Agent SEO/SEM Interplay Report System
+ * Multi-Agent SEO/SEM Interplay Report System with skill-based analysis.
  */
 
 // Main orchestrator functions
@@ -13,9 +13,10 @@ export {
   hasExistingReports,
 } from './orchestrator.js';
 
-// Types
+// Core types
 export type {
   GenerateReportOptions,
+  GenerateReportResult,
   InterplayReportResponse,
   DebugReportResponse,
   ReportTrigger,
@@ -23,3 +24,14 @@ export type {
   UnifiedRecommendation,
   ExecutiveSummary,
 } from './types.js';
+
+// Metadata types
+export type {
+  ReportGenerationMetadata,
+  SkillBundleMetadata,
+  ReportPerformanceMetrics,
+  ReportWarning,
+} from './types.js';
+
+// Business type from skills
+export type { BusinessType } from './skills/types.js';

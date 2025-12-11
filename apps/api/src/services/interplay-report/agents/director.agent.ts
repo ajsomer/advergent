@@ -3,6 +3,9 @@
  *
  * Combines SEM and SEO agent outputs into a unified executive report
  * with prioritized, deduplicated recommendations.
+ *
+ * Supports skill-based configuration for business-type-aware synthesis
+ * and filtering rules.
  */
 
 import { logger } from '@/utils/logger.js';
@@ -10,13 +13,29 @@ import { callGenericAI } from '@/services/ai-analyzer.service.js';
 import { directorOutputSchema } from '../schemas.js';
 import { buildDirectorPrompt } from '../prompts/index.js';
 import type { SEMAgentOutput, SEOAgentOutput, DirectorOutput } from '../types.js';
+import type { DirectorSkillDefinition } from '../skills/types.js';
 
 const directorLogger = logger.child({ module: 'director-agent' });
+
+// ============================================================================
+// INPUT/OUTPUT TYPES
+// ============================================================================
 
 export interface DirectorAgentContext {
   industry?: string;
   targetMarket?: string;
   clientName?: string;
+}
+
+export interface DirectorAgentInput {
+  semOutput: SEMAgentOutput;
+  seoOutput: SEOAgentOutput;
+  skill: DirectorSkillDefinition;
+  clientContext: DirectorAgentContext;
+}
+
+export interface DirectorOutputWithMeta extends DirectorOutput {
+  skillVersion?: string;
 }
 
 /**
@@ -131,21 +150,28 @@ function parseAndValidateResponse(
   return { data: validationResult.data };
 }
 
-export async function runDirectorAgent(
-  semAnalysis: SEMAgentOutput,
-  seoAnalysis: SEOAgentOutput,
-  context: DirectorAgentContext
-): Promise<DirectorOutput> {
+// ============================================================================
+// DIRECTOR AGENT
+// ============================================================================
+
+/**
+ * Run Director agent with skill configuration.
+ * Uses skill-based prompt building and filtering rules.
+ */
+export async function runDirectorAgent(input: DirectorAgentInput): Promise<DirectorOutputWithMeta> {
+  const { semOutput, seoOutput, skill, clientContext } = input;
+
   directorLogger.info(
     {
-      semActionCount: semAnalysis.semActions.length,
-      seoActionCount: seoAnalysis.seoActions.length,
+      semActionCount: semOutput.semActions.length,
+      seoActionCount: seoOutput.seoActions.length,
+      skillVersion: skill.version,
     },
-    'Director Agent: Starting synthesis'
+    'Director Agent: Starting skill-based synthesis'
   );
 
   // Handle edge case where both agents have no recommendations
-  if (semAnalysis.semActions.length === 0 && seoAnalysis.seoActions.length === 0) {
+  if (semOutput.semActions.length === 0 && seoOutput.seoActions.length === 0) {
     directorLogger.warn('Director Agent: No recommendations to synthesize');
     return {
       executiveSummary: {
@@ -153,10 +179,15 @@ export async function runDirectorAgent(
         keyHighlights: ['No urgent issues detected', 'Consider expanding data sources'],
       },
       unifiedRecommendations: [],
+      skillVersion: skill.version,
     };
   }
 
-  const prompt = buildDirectorPrompt(semAnalysis, seoAnalysis, context);
+  // Build prompt using skill configuration
+  const prompt = buildDirectorPrompt(semOutput, seoOutput, {
+    skill,
+    ...clientContext,
+  });
 
   let response: string;
   try {
@@ -182,65 +213,110 @@ export async function runDirectorAgent(
     throw new Error(`Director Agent failed to generate valid JSON synthesis: ${result.error}`);
   }
 
-  // Apply final filtering to ensure max 10 recommendations
-  const filteredRecommendations = applyRecommendationFiltering(
-    result.data.unifiedRecommendations
+  // Apply skill-based filtering
+  const filteredRecommendations = applySkillBasedFiltering(
+    result.data.unifiedRecommendations,
+    skill.filtering
   );
 
   if (result.warning) {
     directorLogger.warn(
-      { warning: result.warning, recommendationCount: filteredRecommendations.length },
-      'Director Agent: Synthesis completed with warning'
+      {
+        warning: result.warning,
+        originalCount: result.data.unifiedRecommendations.length,
+        filteredCount: filteredRecommendations.length,
+      },
+      'Director Agent: Skill-based synthesis completed with warning'
     );
   } else {
     directorLogger.info(
       {
         originalCount: result.data.unifiedRecommendations.length,
         filteredCount: filteredRecommendations.length,
+        skillVersion: skill.version,
       },
-      'Director Agent: Synthesis complete'
+      'Director Agent: Skill-based synthesis complete'
     );
   }
 
   return {
     ...result.data,
     unifiedRecommendations: filteredRecommendations,
+    skillVersion: skill.version,
   };
 }
 
 /**
- * Apply filtering rules:
- * - If > 10 high/medium recommendations: drop low
- * - If < 5 high/medium: include best low to reach 5-7
- * - Cap at 10 max
+ * Apply skill-based filtering to recommendations.
  */
-function applyRecommendationFiltering(
-  recommendations: DirectorOutput['unifiedRecommendations']
+function applySkillBasedFiltering(
+  recommendations: DirectorOutput['unifiedRecommendations'],
+  filterConfig: DirectorSkillDefinition['filtering']
 ): DirectorOutput['unifiedRecommendations'] {
-  // Sort by impact priority (high > medium > low)
-  const sorted = [...recommendations].sort((a, b) => {
-    const priority = { high: 3, medium: 2, low: 1 };
-    return priority[b.impact] - priority[a.impact];
-  });
+  let filtered = [...recommendations];
 
-  const highMedium = sorted.filter((r) => r.impact !== 'low');
-  const low = sorted.filter((r) => r.impact === 'low');
+  // Separate must-include recommendations
+  const mustIncludeRecs = filtered.filter((rec) =>
+    filterConfig.mustInclude.some(
+      (includeType) =>
+        rec.type.toLowerCase().includes(includeType.toLowerCase()) ||
+        rec.title.toLowerCase().includes(includeType.toLowerCase())
+    )
+  );
 
-  let result: DirectorOutput['unifiedRecommendations'];
-
-  if (highMedium.length > 10) {
-    // More than 10 high/medium: take top 10, drop all low
-    result = highMedium.slice(0, 10);
-  } else if (highMedium.length >= 5) {
-    // 5-10 high/medium: cap at 10
-    const remaining = 10 - highMedium.length;
-    result = [...highMedium, ...low.slice(0, remaining)];
-  } else {
-    // < 5 high/medium: include low to reach 5-7
-    const target = Math.max(5, Math.min(7, highMedium.length + low.length));
-    const lowToInclude = target - highMedium.length;
-    result = [...highMedium, ...low.slice(0, lowToInclude)];
+  // Exclude recommendations matching mustExclude patterns
+  if (filterConfig.mustExclude.length > 0) {
+    filtered = filtered.filter(
+      (rec) =>
+        !filterConfig.mustExclude.some(
+          (excludeType) =>
+            rec.type.toLowerCase().includes(excludeType.toLowerCase()) ||
+            rec.title.toLowerCase().includes(excludeType.toLowerCase()) ||
+            rec.description.toLowerCase().includes(excludeType.toLowerCase())
+        )
+    );
   }
 
-  return result.slice(0, 10); // Final cap
+  // Filter by minimum impact threshold
+  const impactPriority: Record<string, number> = { high: 3, medium: 2, low: 1 };
+  const minImpactValue = impactPriority[filterConfig.minImpactThreshold] ?? 0;
+
+  filtered = filtered.filter((rec) => {
+    const recImpactValue = impactPriority[rec.impact] ?? 0;
+    return recImpactValue >= minImpactValue;
+  });
+
+  // Sort by weighted impact score
+  const { impactWeights } = filterConfig;
+  filtered = filtered.sort((a, b) => {
+    const aScore = calculateWeightedScore(a, impactWeights);
+    const bScore = calculateWeightedScore(b, impactWeights);
+    return bScore - aScore;
+  });
+
+  // Ensure must-includes are present (add back if filtered out)
+  for (const must of mustIncludeRecs) {
+    if (!filtered.includes(must)) {
+      filtered.unshift(must);
+    }
+  }
+
+  // Limit to max recommendations
+  return filtered.slice(0, filterConfig.maxRecommendations);
 }
+
+/**
+ * Calculate weighted score for a recommendation.
+ */
+function calculateWeightedScore(
+  rec: DirectorOutput['unifiedRecommendations'][0],
+  weights: DirectorSkillDefinition['filtering']['impactWeights']
+): number {
+  const impactScore = { high: 3, medium: 2, low: 1 }[rec.impact] ?? 0;
+  const effortScore = { low: 3, medium: 2, high: 1 }[rec.effort] ?? 0; // Inverted - low effort is better
+
+  // Higher impact and lower effort = higher score
+  // Use revenue weight for impact, effort weight for effort
+  return impactScore * weights.revenue + effortScore * weights.effort;
+}
+

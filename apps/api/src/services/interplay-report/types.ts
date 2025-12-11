@@ -170,10 +170,53 @@ export interface DirectorOutput {
 // ============================================================================
 
 import type { ReportTrigger, InterplayReportResponse } from '@advergent/shared';
+import type { BusinessType } from './skills/types.js';
 
 export interface GenerateReportOptions {
   days?: number;
   trigger: ReportTrigger;
+  businessType?: BusinessType;
+}
+
+// ============================================================================
+// REPORT METADATA TYPES
+// ============================================================================
+
+export interface ReportWarning {
+  type: string;
+  message: string;
+}
+
+export interface SkillBundleMetadata {
+  businessType: BusinessType;
+  version: string;
+  usingFallback: boolean;
+  fallbackFrom?: BusinessType;
+}
+
+export interface ReportPerformanceMetrics {
+  totalDurationMs: number;
+  skillLoadTimeMs: number;
+  dataFetchTimeMs: number;
+  scoutDurationMs: number;
+  researcherDurationMs: number;
+  semDurationMs: number;
+  seoDurationMs: number;
+  directorDurationMs: number;
+}
+
+export interface ReportGenerationMetadata {
+  reportId: string;
+  clientAccountId: string;
+  generatedAt: string;
+  skillBundle: SkillBundleMetadata;
+  warnings: ReportWarning[];
+  performance: ReportPerformanceMetrics;
+}
+
+export interface GenerateReportResult {
+  reportId: string;
+  metadata: ReportGenerationMetadata;
 }
 
 export interface DebugReportResponse extends InterplayReportResponse {

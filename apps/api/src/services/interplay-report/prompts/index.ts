@@ -1,16 +1,13 @@
 /**
  * Prompts Module - Re-exports all prompt builders
+ *
+ * All prompt builders use skill-based configuration for business-type-aware prompts.
  */
 
-// Legacy prompt builders (backward compatibility)
-export { buildSEMPrompt, type SEMPromptContext } from './sem.prompt.js';
-export { buildSEOPrompt, type SEOPromptContext } from './seo.prompt.js';
-export { buildDirectorPrompt, type DirectorPromptContext } from './director.prompt.js';
-
-// New skill-based prompt builders
-export { buildSEMPromptWithSkill, type SEMAgentContext } from './sem.prompt.js';
-export { buildSEOPromptWithSkill, type SEOAgentContext } from './seo.prompt.js';
-export { buildDirectorPromptWithSkill, type DirectorAgentContext } from './director.prompt.js';
+// Skill-based prompt builders
+export { buildSEMPrompt, type SEMAgentContext } from './sem.prompt.js';
+export { buildSEOPrompt, type SEOAgentContext } from './seo.prompt.js';
+export { buildDirectorPrompt, type DirectorAgentContext } from './director.prompt.js';
 
 // Serialization utilities
 export {

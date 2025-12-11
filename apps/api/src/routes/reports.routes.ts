@@ -113,8 +113,18 @@ router.post('/:clientId/interplay-report/regenerate', async (req: Request, res: 
 
     // Log when complete (don't await in response)
     reportPromise
-      .then((reportId) => {
-        routeLogger.info({ clientId, reportId }, 'Manual report generation complete');
+      .then(({ reportId, metadata }) => {
+        routeLogger.info(
+          {
+            clientId,
+            reportId,
+            businessType: metadata.skillBundle.businessType,
+            skillVersion: metadata.skillBundle.version,
+            totalDurationMs: metadata.performance.totalDurationMs,
+            warningCount: metadata.warnings.length,
+          },
+          'Manual report generation complete'
+        );
       })
       .catch((error) => {
         routeLogger.error({ clientId, error: error.message }, 'Manual report generation failed');

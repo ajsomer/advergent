@@ -376,6 +376,11 @@ export const interplayReports = pgTable('interplay_reports', {
   processingTimeMs: integer('processing_time_ms'),
   errorMessage: text('error_message'),
 
+  // Skill and performance metadata (stored as JSON)
+  skillMetadataJson: text('skill_metadata_json'), // SkillBundleMetadata
+  performanceMetricsJson: text('performance_metrics_json'), // ReportPerformanceMetrics
+  warningsJson: text('warnings_json'), // ReportWarning[]
+
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
   startedAt: timestamp('started_at', { withTimezone: true }),
   completedAt: timestamp('completed_at', { withTimezone: true }),
