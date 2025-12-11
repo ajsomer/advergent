@@ -25,6 +25,9 @@ export const recommendationCategoryEnum = pgEnum('recommendation_category', ['se
 export const impactLevelEnum = pgEnum('impact_level', ['high', 'medium', 'low']);
 export const effortLevelEnum = pgEnum('effort_level', ['high', 'medium', 'low']);
 
+// Phase 6: Constraint Validation enums
+export const constraintViolationSourceEnum = pgEnum('constraint_violation_source', ['sem', 'seo']);
+
 // ============================================================================
 // CORE TABLES
 // ============================================================================
@@ -391,6 +394,51 @@ export const interplayReports = pgTable('interplay_reports', {
 }));
 
 // ============================================================================
+// CONSTRAINT VIOLATIONS (PHASE 6)
+// ============================================================================
+
+/**
+ * Tracks constraint violations from upstream agents (SEM, SEO).
+ * Used for debugging prompt quality and monitoring system health.
+ */
+export const constraintViolations = pgTable('constraint_violations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+
+  // Link to the report where violation was detected
+  reportId: uuid('report_id').notNull().references(() => interplayReports.id, { onDelete: 'cascade' }),
+
+  // Client context for analysis
+  clientAccountId: uuid('client_account_id').notNull().references(() => clientAccounts.id, { onDelete: 'cascade' }),
+
+  // Business type at time of violation (for trend analysis)
+  businessType: varchar('business_type', { length: 50 }).notNull(),
+
+  // Which agent generated the violation
+  source: constraintViolationSourceEnum('source').notNull(),
+
+  // Which constraint rule was violated (e.g., "metric:roas", "schema:Product")
+  constraintId: varchar('constraint_id', { length: 100 }).notNull(),
+
+  // Preview of the violating content (truncated for storage)
+  violatingContent: text('violating_content').notNull(),
+
+  // Skill version for debugging
+  skillVersion: varchar('skill_version', { length: 20 }).notNull(),
+
+  // Timestamps
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  reportIdx: index('idx_constraint_violations_report').on(table.reportId),
+  clientIdx: index('idx_constraint_violations_client').on(table.clientAccountId),
+  businessTypeIdx: index('idx_constraint_violations_business_type').on(table.businessType),
+  sourceIdx: index('idx_constraint_violations_source').on(table.source),
+  constraintIdIdx: index('idx_constraint_violations_constraint_id').on(table.constraintId),
+  createdAtIdx: index('idx_constraint_violations_created_at').on(table.createdAt),
+  // Composite index for trend analysis by business type and constraint
+  trendIdx: index('idx_constraint_violations_trend').on(table.businessType, table.constraintId, table.createdAt),
+}));
+
+// ============================================================================
 // CSV UPLOAD TABLES
 // ============================================================================
 
@@ -695,6 +743,22 @@ export const interplayReportsRelations = relations(interplayReports, ({ one, man
     references: [clientAccounts.id],
   }),
   recommendations: many(recommendations),
+  constraintViolations: many(constraintViolations),
+}));
+
+// ============================================================================
+// CONSTRAINT VIOLATIONS RELATIONS (PHASE 6)
+// ============================================================================
+
+export const constraintViolationsRelations = relations(constraintViolations, ({ one }) => ({
+  interplayReport: one(interplayReports, {
+    fields: [constraintViolations.reportId],
+    references: [interplayReports.id],
+  }),
+  clientAccount: one(clientAccounts, {
+    fields: [constraintViolations.clientAccountId],
+    references: [clientAccounts.id],
+  }),
 }));
 
 // ============================================================================

@@ -4,8 +4,9 @@
  */
 
 import { db } from '@/db/index.js';
-import { interplayReports, recommendations } from '@/db/schema.js';
+import { interplayReports, recommendations, constraintViolations } from '@/db/schema.js';
 import { eq, desc, and } from 'drizzle-orm';
+import type { ConstraintViolation } from './utils/constraint-validation.js';
 import type {
   ReportTrigger,
   ReportStatus,
@@ -250,4 +251,62 @@ export async function getInterplayRecommendations(reportId: string) {
         eq(recommendations.source, 'interplay_report')
       )
     );
+}
+
+// ============================================================================
+// CONSTRAINT VIOLATION OPERATIONS (PHASE 6)
+// ============================================================================
+
+export interface StoreConstraintViolationsParams {
+  reportId: string;
+  clientAccountId: string;
+  businessType: string;
+  violations: ConstraintViolation[];
+  skillVersion: string;
+}
+
+/**
+ * Stores constraint violations detected during report generation.
+ * Used for debugging prompt quality and monitoring system health.
+ */
+export async function storeConstraintViolations(
+  params: StoreConstraintViolationsParams
+): Promise<void> {
+  if (params.violations.length === 0) {
+    return;
+  }
+
+  const values = params.violations.map((violation) => ({
+    reportId: params.reportId,
+    clientAccountId: params.clientAccountId,
+    businessType: params.businessType,
+    source: violation.source as 'sem' | 'seo',
+    constraintId: violation.ruleId,
+    violatingContent: violation.matchedContent.slice(0, 1000), // Truncate to 1000 chars
+    skillVersion: params.skillVersion,
+  }));
+
+  await db.insert(constraintViolations).values(values);
+}
+
+/**
+ * Gets constraint violations for a specific report.
+ */
+export async function getConstraintViolationsForReport(reportId: string) {
+  return db
+    .select()
+    .from(constraintViolations)
+    .where(eq(constraintViolations.reportId, reportId));
+}
+
+/**
+ * Gets constraint violation statistics by business type.
+ * Useful for identifying which business types have prompt quality issues.
+ */
+export async function getConstraintViolationsByBusinessType(businessType: string) {
+  return db
+    .select()
+    .from(constraintViolations)
+    .where(eq(constraintViolations.businessType, businessType))
+    .orderBy(desc(constraintViolations.createdAt));
 }

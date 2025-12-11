@@ -36,6 +36,7 @@ import {
   getLatestReport,
   getReportById,
   getReportCount,
+  storeConstraintViolations,
 } from './queries.js';
 
 import { constructInterplayDataFromDb } from './utils/index.js';
@@ -270,21 +271,53 @@ async function generateInterplayReportWithSkill(
       'SEM and SEO agents complete'
     );
 
-    // 6. Director (synthesis with skill-based filtering)
+    // 6. Director (synthesis with skill-based filtering and constraint validation)
     const directorStart = Date.now();
     const directorOutput = await runDirectorAgent({
       semOutput: semResult,
       seoOutput: seoResult,
       skill: skillBundle.director,
-      clientContext,
+      clientContext: {
+        ...clientContext,
+        clientId: clientAccountId,
+        businessType,
+      },
     });
     performance.directorDurationMs = Date.now() - directorStart;
+
+    // Phase 6: Store constraint violations if any were detected
+    if (directorOutput.validationResult && directorOutput.validationResult.violations.length > 0) {
+      await storeConstraintViolations({
+        reportId,
+        clientAccountId,
+        businessType,
+        violations: directorOutput.validationResult.violations,
+        skillVersion: skillBundle.version,
+      });
+
+      // Add warning about constraint violations
+      warnings.push({
+        type: 'constraint-violations',
+        message: `${directorOutput.validationResult.violations.length} upstream constraint violations detected and filtered`,
+      });
+
+      orchestratorLogger.warn(
+        {
+          reportId,
+          clientAccountId,
+          businessType,
+          violationCount: directorOutput.validationResult.violations.length,
+        },
+        'Constraint violations stored for debugging'
+      );
+    }
 
     orchestratorLogger.debug(
       {
         unifiedRecommendations: directorOutput.unifiedRecommendations.length,
         highlights: directorOutput.executiveSummary.keyHighlights?.length ?? 0,
         directorDurationMs: performance.directorDurationMs,
+        constraintViolations: directorOutput.constraintValidation?.violationCount ?? 0,
       },
       'Director phase complete'
     );

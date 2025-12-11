@@ -6,6 +6,9 @@
  *
  * Supports skill-based configuration for business-type-aware synthesis
  * and filtering rules.
+ *
+ * Phase 6: Includes constraint validation to filter invalid upstream
+ * recommendations before synthesis.
  */
 
 import { logger } from '@/utils/logger.js';
@@ -14,6 +17,12 @@ import { directorOutputSchema } from '../schemas.js';
 import { buildDirectorPrompt } from '../prompts/index.js';
 import type { SEMAgentOutput, SEOAgentOutput, DirectorOutput } from '../types.js';
 import type { DirectorSkillDefinition } from '../skills/types.js';
+import {
+  validateUpstreamConstraints,
+  extractFilteredSEMActions,
+  extractFilteredSEOActions,
+  type ConstraintValidationResult,
+} from '../utils/index.js';
 
 const directorLogger = logger.child({ module: 'director-agent' });
 
@@ -25,6 +34,8 @@ export interface DirectorAgentContext {
   industry?: string;
   targetMarket?: string;
   clientName?: string;
+  clientId?: string;
+  businessType?: string;
 }
 
 export interface DirectorAgentInput {
@@ -34,8 +45,24 @@ export interface DirectorAgentInput {
   clientContext: DirectorAgentContext;
 }
 
+/**
+ * Constraint validation metadata included in director output.
+ */
+export interface ConstraintValidationMeta {
+  /** Number of violations detected */
+  violationCount: number;
+  /** Count after filtering */
+  filteredCount: number;
+  /** Original count before filtering */
+  originalCount: number;
+}
+
 export interface DirectorOutputWithMeta extends DirectorOutput {
   skillVersion?: string;
+  /** Phase 6: Constraint validation metadata */
+  constraintValidation?: ConstraintValidationMeta;
+  /** Phase 6: Full validation result for storage */
+  validationResult?: ConstraintValidationResult;
 }
 
 /**
@@ -157,6 +184,9 @@ function parseAndValidateResponse(
 /**
  * Run Director agent with skill configuration.
  * Uses skill-based prompt building and filtering rules.
+ *
+ * Phase 6: Validates upstream constraints before synthesis to filter
+ * invalid recommendations from SEM/SEO agents.
  */
 export async function runDirectorAgent(input: DirectorAgentInput): Promise<DirectorOutputWithMeta> {
   const { semOutput, seoOutput, skill, clientContext } = input;
@@ -170,21 +200,64 @@ export async function runDirectorAgent(input: DirectorAgentInput): Promise<Direc
     'Director Agent: Starting skill-based synthesis'
   );
 
-  // Handle edge case where both agents have no recommendations
-  if (semOutput.semActions.length === 0 && seoOutput.seoActions.length === 0) {
-    directorLogger.warn('Director Agent: No recommendations to synthesize');
+  // Phase 6: Validate upstream constraints before synthesis
+  const validationResult = validateUpstreamConstraints(semOutput, seoOutput, skill);
+
+  // Log if violations were detected (indicates prompt weakness in upstream agents)
+  if (validationResult.violations.length > 0) {
+    directorLogger.error(
+      {
+        clientAccountId: clientContext.clientId,
+        businessType: clientContext.businessType,
+        violationCount: validationResult.violations.length,
+        violations: validationResult.violations.map((v) => ({
+          source: v.source,
+          ruleId: v.ruleId,
+          contentPreview: v.matchedContent.slice(0, 100),
+        })),
+      },
+      'CONSTRAINT VIOLATIONS: Upstream agents generated invalid recommendations'
+    );
+  }
+
+  // Extract filtered actions back to original format
+  const filteredSemActions = extractFilteredSEMActions(validationResult.filtered);
+  const filteredSeoActions = extractFilteredSEOActions(validationResult.filtered);
+
+  // Create filtered outputs for prompt building
+  const filteredSemOutput: SEMAgentOutput = { semActions: filteredSemActions };
+  const filteredSeoOutput: SEOAgentOutput = { seoActions: filteredSeoActions };
+
+  // Handle edge case where all recommendations were filtered or none existed
+  if (filteredSemActions.length === 0 && filteredSeoActions.length === 0) {
+    directorLogger.warn(
+      {
+        originalSemCount: semOutput.semActions.length,
+        originalSeoCount: seoOutput.seoActions.length,
+        filteredCount: 0,
+        violationCount: validationResult.violations.length,
+      },
+      'Director Agent: No recommendations to synthesize after constraint validation'
+    );
     return {
       executiveSummary: {
-        summary: 'No significant optimization opportunities were identified in the current data. This may indicate the account is well-optimized or that additional data is needed for analysis.',
+        summary:
+          'No significant optimization opportunities were identified in the current data. This may indicate the account is well-optimized or that additional data is needed for analysis.',
         keyHighlights: ['No urgent issues detected', 'Consider expanding data sources'],
       },
       unifiedRecommendations: [],
       skillVersion: skill.version,
+      constraintValidation: {
+        violationCount: validationResult.violations.length,
+        filteredCount: validationResult.filteredCount,
+        originalCount: validationResult.originalCount,
+      },
+      validationResult,
     };
   }
 
-  // Build prompt using skill configuration
-  const prompt = buildDirectorPrompt(semOutput, seoOutput, {
+  // Build prompt using filtered actions
+  const prompt = buildDirectorPrompt(filteredSemOutput, filteredSeoOutput, {
     skill,
     ...clientContext,
   });
@@ -213,7 +286,7 @@ export async function runDirectorAgent(input: DirectorAgentInput): Promise<Direc
     throw new Error(`Director Agent failed to generate valid JSON synthesis: ${result.error}`);
   }
 
-  // Apply skill-based filtering
+  // Apply skill-based filtering to final recommendations
   const filteredRecommendations = applySkillBasedFiltering(
     result.data.unifiedRecommendations,
     skill.filtering
@@ -225,6 +298,7 @@ export async function runDirectorAgent(input: DirectorAgentInput): Promise<Direc
         warning: result.warning,
         originalCount: result.data.unifiedRecommendations.length,
         filteredCount: filteredRecommendations.length,
+        constraintViolations: validationResult.violations.length,
       },
       'Director Agent: Skill-based synthesis completed with warning'
     );
@@ -234,6 +308,8 @@ export async function runDirectorAgent(input: DirectorAgentInput): Promise<Direc
         originalCount: result.data.unifiedRecommendations.length,
         filteredCount: filteredRecommendations.length,
         skillVersion: skill.version,
+        constraintViolations: validationResult.violations.length,
+        upstreamActionsFiltered: validationResult.originalCount - validationResult.filteredCount,
       },
       'Director Agent: Skill-based synthesis complete'
     );
@@ -243,6 +319,12 @@ export async function runDirectorAgent(input: DirectorAgentInput): Promise<Direc
     ...result.data,
     unifiedRecommendations: filteredRecommendations,
     skillVersion: skill.version,
+    constraintValidation: {
+      violationCount: validationResult.violations.length,
+      filteredCount: validationResult.filteredCount,
+      originalCount: validationResult.originalCount,
+    },
+    validationResult,
   };
 }
 
